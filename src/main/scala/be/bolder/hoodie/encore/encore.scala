@@ -50,6 +50,7 @@ object EncoreSchemaFactory extends SchemaFactory {
     // skip list pointers
     private[EncoreSchemaFactory] val ptrMap: Array[SkipNode] = new Array[SkipNode]( state.fieldCount )
 
+    // used to avoid data structure corruption by invalid use at the expense of record size
     private[EncoreSchemaFactory] var inserted = new BitSet( state.fieldCount )
   }
 
@@ -100,14 +101,16 @@ object EncoreSchemaFactory extends SchemaFactory {
         if (i == 0)
           return null
 
+        var alreadyChecked: R = null
         do {
           i -= 1
 
           keyNode = node(i)
-          while (keyNode != null && wdm.lt(get(keyNode), searchKey)) {
+          while (keyNode != null && keyNode != alreadyChecked && wdm.lt(get(keyNode), searchKey)) {
             node = getForwardPointers(keyNode)
             keyNode = node(i)
           }
+          alreadyChecked = keyNode
         } while (i > 0)
 
         if (keyNode eq null)
@@ -134,15 +137,16 @@ object EncoreSchemaFactory extends SchemaFactory {
         // unless list is empty
         if (i > 0) {
           var keyNode: R = null
+          var alreadyChecked: R = null
           do {
             i -= 1
 
             keyNode = node(i)
-            while (keyNode != null && wdm.lt(get(keyNode), searchKey)) {
+            while (keyNode != null && alreadyChecked != keyNode && wdm.lt(get(keyNode), searchKey)) {
               node = getForwardPointers(keyNode)
               keyNode = node(i)
             }
-
+            alreadyChecked = keyNode
             update(i) = node
           } while (i > 0)
 
