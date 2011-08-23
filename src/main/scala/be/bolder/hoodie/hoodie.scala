@@ -37,9 +37,6 @@ package object hoodie {
 package hoodie {
 
 import reflect.Manifest
-import com.tinkerpop.blueprints.pgm.{Vertex, Graph}
-import util.Random
-import com.sun.xml.internal.rngom.ast.builder.SchemaBuilder
 
 // Stock symmetric WDMs for primitive types
 object PlainWDM {
@@ -134,7 +131,7 @@ trait Schema[R] {
 
 
 // Factory for creating schemas of type R
-trait SchemaFactory {
+abstract class SchemaFactory {
   type R
   type F[T] <: Field[R, T]
   type B <: Builder
