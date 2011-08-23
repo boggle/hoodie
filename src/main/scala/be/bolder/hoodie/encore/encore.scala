@@ -109,6 +109,8 @@ object EncoreSchemaFactory extends SchemaFactory {
   def newBuilder: B = new PrimBuilder
 
   final class PrimSchema(val fields: IndexedSeq[F[_]], val state: State) extends Schema[PrimRecord] {
+    override type F[T] = EncoreSchemaFactory.this.F[T]
+
     def mkRecord: PrimRecord = new PrimRecord(state)
 
     def mkFromString(lineStr: String): PrimRecord = {

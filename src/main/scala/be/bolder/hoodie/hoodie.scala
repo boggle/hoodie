@@ -37,6 +37,7 @@ package object hoodie {
 package hoodie {
 
 import reflect.Manifest
+import util.Random
 
 // Stock symmetric WDMs for primitive types
 object PlainWDM {
@@ -91,10 +92,12 @@ abstract class Field[R, T](val name: String,
 
 
 // Data schema for records of type R
-trait Schema[R] {
+abstract class Schema[R] {
   var separator = ","
 
-  val fields: IndexedSeq[Field[R, _]]
+  type F[T] <: Field[R, T]
+
+  val fields: IndexedSeq[F[_]]
 
   def distance(weights: Weighting, a:R, b: R): Float = {
     var dist = 0.0f
