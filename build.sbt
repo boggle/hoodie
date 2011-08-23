@@ -8,13 +8,13 @@ organization := "be.bolder"
 
 resolvers += ScalaToolsSnapshots
 
-resolvers += "Tinkerpop" at "http://tinkerpop.com/maven2"
+// resolvers += "Tinkerpop" at "http://tinkerpop.com/maven2"
 
 libraryDependencies += "org.scala-tools.testing" %% "scalacheck" % "1.8" % "test"
 
-libraryDependencies += "com.tinkerpop.blueprints" %% "blueprints-core" % "0.9" // from "http://tinkerpop.com/maven2/com/tinkerpop/blueprints/blueprints-core/0.9/blueprints-core-0.9.jar"
+// libraryDependencies += "com.tinkerpop.blueprints" %% "blueprints-core" % "0.9" // from "http://tinkerpop.com/maven2/com/tinkerpop/blueprints/blueprints-core/0.9/blueprints-core-0.9.jar"
 
-libraryDependencies += "com.tinkerpop.blueprints" %% "blueprints-neo4j-graph" % "0.9" // from "http://tinkerpop.com/maven2/com/tinkerpop/blueprints/blueprints-neo4j-graph/0.9/blueprints-neo4j-graph-0.9.jar"
+// libraryDependencies += "com.tinkerpop.blueprints" %% "blueprints-neo4j-graph" % "0.9" // from "http://tinkerpop.com/maven2/com/tinkerpop/blueprints/blueprints-neo4j-graph/0.9/blueprints-neo4j-graph-0.9.jar"
 
 maxErrors := 20
 

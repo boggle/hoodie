@@ -1,5 +1,7 @@
 package be.bolder
 
+import scala.collection.mutable.Builder
+
 package object hoodie {
 
   // Vector of weights
@@ -37,6 +39,7 @@ package hoodie {
 import reflect.Manifest
 import com.tinkerpop.blueprints.pgm.{Vertex, Graph}
 import util.Random
+import com.sun.xml.internal.rngom.ast.builder.SchemaBuilder
 
 // Stock symmetric WDMs for primitive types
 object PlainWDM {
@@ -72,6 +75,7 @@ object PlainIXS {
 // (doesn't work with blueprints but might with neo4j)
 abstract class Field[R, T](val name: String,
                            implicit val ixs: IXS[T], implicit val wdm: WDM[T], implicit val mf: Manifest[T]) {
+
   def get(record: R): T
   def set(record: R, value: T)
 
@@ -84,7 +88,7 @@ abstract class Field[R, T](val name: String,
     set(record, parse(str))
   }
 
-  // Field distance defined for records (This is a WDM[R])
+  // Field distance defined for records
   def distance(w: Float, a:R, b: R): Float = wdm.distance(w, get(a), get(b))
 }
 
@@ -112,6 +116,10 @@ trait Schema[R] {
       field.setFromString(record, valueStr)
   }
 
+
+  // Create an empty, unpopulated record
+  def mkRecord: R
+
   // Creates a record by parsing lineStr according to the schema
   // (The resulting record is NOT automatically inserted into the index structure)
   def mkFromString(lineStr: String): R
@@ -126,14 +134,24 @@ trait Schema[R] {
 
 
 // Factory for creating schemas of type R
-trait SchemaFactory[R] {
-  // Create schema for storing records with the given fields
-  def mkSchema(fields: Field[R, _]*): Schema[R]
+trait SchemaFactory {
+  type R
+  type F[T] <: Field[R, T]
+  type B <: Builder
 
-  // Create field descriptor
-  def mkField[T <: Ordered[T]](name: String)(implicit ixs: IXS[T], wdm: WDM[T], mf: Manifest[T]): Field[R, T]
+  abstract class Builder {
+    // rewind builder
+    def clear()
+
+    // add fields
+    def addField[T](name: String)(implicit ixs: IXS[T], wdm: WDM[T], mf: Manifest[T]): F[T]
+
+    // construct schema
+    def result: Schema[R]
+  }
+
+  def newBuilder: B
 }
-
 
 }
 
