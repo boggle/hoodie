@@ -4,6 +4,11 @@ import be.bolder.hoodie._
 import scala.reflect.Manifest
 import collection.mutable.{BitSet}
 import collection.immutable.Queue
+import java.lang.Thread.State
+import sun.jvm.hotspot.debugger.posix.elf.ELFSectionHeader
+import sun.tools.tree.WhileStatement
+import com.sun.xml.internal.ws.developer.MemberSubmissionAddressing.Validation
+import java.lang.IllegalArgumentException
 
 // Pure in-memory implementation of the algorithm
 object EncoreSchemaFactory extends SchemaFactory {
@@ -11,23 +16,41 @@ object EncoreSchemaFactory extends SchemaFactory {
   override type B = PrimBuilder
   override type F[T] = B#PrimField[T]
 
+  // Type of skip list nodes (factored out in case we need to go to indexed etc)
+  type SkipNode = Array[PrimRecord]
+
+  // Max level of skip list pointers
+  val MAX_LEVEL: Int = 32
+
   // Static state used during schema building
   final class State {
     private[EncoreSchemaFactory] var fieldCount: Int = 0
     private[EncoreSchemaFactory] var intFieldCount: Int = 0
     private[EncoreSchemaFactory] var boolFieldCount: Int = 0
     private[EncoreSchemaFactory] var floatFieldCount: Int = 0
+
+    // Skip list heads
+    private[EncoreSchemaFactory] var heads: Array[SkipNode] = null
+    // 1-based
+    private[EncoreSchemaFactory] var levels: Array[Int] = null
   }
 
   // PrimRecords aggregate field values by type into arrays
   final class PrimRecord(state: EncoreSchemaFactory.State) {
-    // regular int field values + stretch information from skip list left pointers
-    private[EncoreSchemaFactory] val intMap: Array[Int] = new Array[Int]( state.intFieldCount + state.fieldCount )
-    private[EncoreSchemaFactory] val boolMap: BitSet = new BitSet( state.boolFieldCount )
-    private[EncoreSchemaFactory] val floatMap: Array[Float] = new Array[Float]( state.floatFieldCount )
+    // regular int field values
+    private[EncoreSchemaFactory] val intMap: Array[Int] =
+      if (state.intFieldCount == 0) null else new Array[Int]( state.intFieldCount )
 
-    // skip list pointers  (left, down)
-    private[EncoreSchemaFactory] val ptrMap: Array[PrimRecord] = new Array[PrimRecord]( state.fieldCount * 2 )
+    private[EncoreSchemaFactory] val boolMap: BitSet =
+      if (state.boolFieldCount == 0) null else new BitSet( state.boolFieldCount )
+
+    private[EncoreSchemaFactory] val floatMap: Array[Float] =
+      if (state.floatFieldCount == 0) null else new Array[Float]( state.floatFieldCount )
+
+    // skip list pointers
+    private[EncoreSchemaFactory] val ptrMap: Array[SkipNode] = new Array[SkipNode]( state.fieldCount )
+
+    private[EncoreSchemaFactory] var inserted = new BitSet( state.fieldCount )
   }
 
   // PrimBuilder ties it all together; as fields get added their typeIndex is set
@@ -36,7 +59,7 @@ object EncoreSchemaFactory extends SchemaFactory {
     private var fields = Queue.newBuilder[F[_]]
 
     // PrimFields keep track of a type index to store values into corresponding PrimRecord array slots
-    class PrimField[T](aName: String, val state: State)(implicit anIxs: IXS[T], aWdm: WDM[T], aMf: Manifest[T])
+    class PrimField[T](aName: String, state: State)(implicit anIxs: IXS[T], aWdm: WDM[T], aMf: Manifest[T])
       extends Field[R, T](aName, anIxs, aWdm, aMf) {
 
       val index = state.fieldCount
@@ -56,22 +79,142 @@ object EncoreSchemaFactory extends SchemaFactory {
         }
 
       def set(record: R, value: T) {
-        mf match {
-          case Manifest.Int => record.intMap(typeIndex) = value.asInstanceOf[Int]
-          case Manifest.Boolean => record.boolMap(typeIndex) = value.asInstanceOf[Boolean]
-          case Manifest.Float => record.floatMap(typeIndex) = value.asInstanceOf[Float]
+        if (record.inserted(index))
+          throw new IllegalArgumentException("Attempt to modify already inserted record")
+        else {
+          mf match {
+            case Manifest.Int => record.intMap(typeIndex) = value.asInstanceOf[Int]
+            case Manifest.Boolean => record.boolMap(typeIndex) = value.asInstanceOf[Boolean]
+            case Manifest.Float => record.floatMap(typeIndex) = value.asInstanceOf[Float]
+          }
         }
       }
 
-      private[EncoreSchemaFactory] def getRight(record: R): R = record.ptrMap(index * 2)
-      private[EncoreSchemaFactory] def setRight(record: R, value: R) { record.ptrMap(index * 2) = value }
+      def search(searchKey: T): R = {
+        var node: Array[R] = state.heads(index)
 
-      private[EncoreSchemaFactory] def getDown(record: R): R = record.ptrMap((index * 2) + 1)
-      private[EncoreSchemaFactory] def setDown(record: R, value: R) { record.ptrMap((index * 2) + 1) = value}
+        var i = state.levels(index)
+        var keyNode: R = null
 
-      private[EncoreSchemaFactory] def getStretch(record: R): Int = record.intMap(state.fieldCount + index)
-      private[EncoreSchemaFactory] def setStretch(record: R, value: Int) {
-        record.intMap(state.fieldCount + index) = value
+        // empty list special case
+        if (i == 0)
+          return null
+
+        do {
+          i -= 1
+
+          keyNode = node(i)
+          while (keyNode != null && wdm.lt(get(keyNode), searchKey)) {
+            node = getForwardPointers(keyNode)
+            keyNode = node(i)
+          }
+        } while (i > 0)
+
+        if (keyNode eq null)
+          null
+        else {
+          val key = get(keyNode)
+          if (wdm.eq(key, searchKey)) keyNode else null
+        }
+      }
+
+      private[EncoreSchemaFactory] def insert(record: R) {
+        if (record.inserted(index))
+          throw new IllegalArgumentException("Record already inserted")
+
+        val head: Array[PrimRecord] = state.heads(index)
+        val headLevel = state.levels(index)
+
+        var node: Array[R] = head
+        var update: Array[SkipNode] = Array.ofDim(MAX_LEVEL)
+        val searchKey: T = get(record)
+
+        var i = headLevel
+
+        // unless list is empty
+        if (i > 0) {
+          var keyNode: R = null
+          do {
+            i -= 1
+
+            keyNode = node(i)
+            while (keyNode != null && wdm.lt(get(keyNode), searchKey)) {
+              node = getForwardPointers(keyNode)
+              keyNode = node(i)
+            }
+
+            update(i) = node
+          } while (i > 0)
+
+          node = getForwardPointers(keyNode)
+        }
+
+        // we insert duplicates, so no update of existing node happens here
+        // should get smarter about handling duplicates, though
+
+        val newLevel = randomLevel()
+        if (newLevel > headLevel) {
+          var j = newLevel
+          do {
+            j -= 1
+            update(j) = head
+          } while (j > 0)
+          state.levels(index) = newLevel
+        }
+
+        val recordForwardPointers = ensureForwardPointerCapacity(record, newLevel)
+        for (val i <- 0.until(newLevel)) {
+          recordForwardPointers(i) = update(i)(i)
+          update(i)(i) = record
+        }
+        record.inserted(index) = true
+      }
+
+      // 1-based !
+      private def randomLevel(): Int = {
+        var level = 0
+        do {
+          level += 1
+        } while (level < MAX_LEVEL && math.random < 0.25d)
+        level
+      }
+
+      private[EncoreSchemaFactory] def getForwardPointer(record: R, i: Int): R = {
+        val pointers = getForwardPointers(record)
+        if (i < pointers.length)
+          pointers(i)
+        else {
+          null
+        }
+      }
+
+      private[EncoreSchemaFactory] def setForwardPointer(record: R, i: Int, value: R) {
+        ensureForwardPointerCapacity(record, i)(i) = value
+      }
+
+      private[EncoreSchemaFactory] def ensureForwardPointerCapacity(record: R, minLevels: Int): SkipNode = {
+        val pointers = getForwardPointers(record)
+        if (pointers eq null) {
+          val newPointers = Array.ofDim[R](minLevels)
+          setForwardPointers(record, newPointers)
+          newPointers
+        }
+        else
+          if (pointers.length < minLevels) {
+            val newSize = math.min(math.max(minLevels, pointers.length * 2), MAX_LEVEL)
+            val newPointers = Array.ofDim[R](newSize)
+            Array.copy(pointers, 0, newPointers, 0, pointers.length)
+            setForwardPointers(record, newPointers)
+            newPointers
+          }
+          else
+            pointers
+      }
+
+      private[EncoreSchemaFactory] def getForwardPointers(record: R): SkipNode = record.ptrMap(index)
+
+      private[EncoreSchemaFactory] def setForwardPointers(record: R, value: SkipNode) {
+        record.ptrMap(index) = value
       }
     }
 
@@ -100,6 +243,9 @@ object EncoreSchemaFactory extends SchemaFactory {
 
     // construct schema
     def result: Schema[R] = {
+      state.heads = Array.ofDim[PrimRecord](state.fieldCount, MAX_LEVEL)
+      state.levels = Array.ofDim[Int](state.fieldCount)
+
       val res = new PrimSchema(fields.result().toIndexedSeq, state)
       clear()
       res
@@ -121,7 +267,8 @@ object EncoreSchemaFactory extends SchemaFactory {
 
     // Insert record into index structure
     def insert(record: PrimRecord) {
-
+      for (field <- fields)
+        field.insert(record)
     }
 
     // Retrieve nearest neighbors of record using the given weighting

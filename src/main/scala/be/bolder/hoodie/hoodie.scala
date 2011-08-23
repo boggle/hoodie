@@ -80,7 +80,10 @@ abstract class Field[R, T](val name: String,
   def parse = ixs._1
   def show = ixs._2
 
-  def getAsString(record: R): String = show(get(record))
+  def getAsString(record: R): String = {
+    val value = get(record)
+    show(value)
+  }
 
   def setFromString(record: R, str: String) {
     set(record, parse(str))
