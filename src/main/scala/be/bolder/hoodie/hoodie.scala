@@ -112,7 +112,8 @@ abstract class Schema[R] {
       val fieldDist = field.distance(weight, a, b)
       dist += (fieldDist * fieldDist)
     }
-    math.sqrt(dist)
+    // yuck... but still better to use float based squaring with large number of fields
+    math.sqrt(dist.toDouble).toFloat
   }
 
   def getAsString(record: R): String = fields.map( _.getAsString(record) ).mkString(separator)

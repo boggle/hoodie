@@ -5,6 +5,7 @@ import scala.reflect.Manifest
 import collection.mutable.{BitSet}
 import collection.immutable.Queue
 import java.lang.IllegalArgumentException
+import runtime.FloatRef
 
 // Nearest-neighbor search based on in-memory skip list
 //
@@ -66,6 +67,10 @@ object EncoreSchemaFactory extends SchemaFactory {
     // skip list forward pointers
     private[EncoreSchemaFactory] val ptrMap: Array[SkipNode] = new Array[SkipNode]( state.fieldCount )
 
+    // skip list pred pointers
+    // TODO: Refactor into ptrMap
+    private[EncoreSchemaFactory] val predMap: Array[R] = new Array[R]( state.fieldCount )
+
     // used to avoid data structure corruption by invalid use (at the expense of increased record size)
     private[EncoreSchemaFactory] var inserted = new BitSet( state.fieldCount )
   }
@@ -110,6 +115,54 @@ object EncoreSchemaFactory extends SchemaFactory {
         }
       }
 
+      // Create a generator that starting from query produces all other records stored in the
+      // skip-list index of this field sorted according to w-weighted field distance
+      //
+      def iterator(w: Float, query: R): Iterator[(Float, R)] =
+        new Iterator[(Float, R)] {
+          var record = query
+          var dist   = 0.0f
+
+          findNext()
+
+          def hasNext = record != null
+
+          override def next() = {
+            val result = (dist, record)
+            findNext()
+            result
+          }
+
+          private def findNext() {
+            val left  = getPredPointer(record)
+
+            if (left eq null) {
+              record = null
+              return
+            }
+
+            val left_distance = distance(w, query, left)
+            val right = getForwardPointer(record, 0)
+
+            if (right eq null) {
+              record = left
+              dist   = left_distance
+              return
+            }
+
+            val right_distance = distance(w, query, right)
+
+            if (left_distance < right_distance) {
+              record = left
+              dist   = left_distance
+            } else {
+              record = right
+              dist   = right_distance
+            }
+          }
+        }
+
+
       // Search for first record that has searchKey as value of this field in internal skip-list index and return it
       def search(searchKey: T): R = {
         var node: Array[R] = state.heads(index)
@@ -147,6 +200,7 @@ object EncoreSchemaFactory extends SchemaFactory {
           throw new IllegalArgumentException("Record already inserted")
 
         val head: Array[PrimRecord] = state.heads(index)
+        var pred: R = null
         val headLevel = state.levels(index)
 
         var node: Array[R] = head
@@ -164,7 +218,8 @@ object EncoreSchemaFactory extends SchemaFactory {
 
             keyNode = node(i)
             while (keyNode != null && alreadyChecked != keyNode && wdm.lt(get(keyNode), searchKey)) {
-              node = getForwardPointers(keyNode)
+              node    = getForwardPointers(keyNode)
+              pred    = keyNode
               keyNode = node(i)
             }
             alreadyChecked = keyNode
@@ -250,6 +305,14 @@ object EncoreSchemaFactory extends SchemaFactory {
       // Set forward pointer array of record for the skip-list index of this field
       private[EncoreSchemaFactory] def setForwardPointers(record: R, value: SkipNode) {
         record.ptrMap(index) = value
+      }
+
+      // Get predecessor pointer of record for the skip-list index of this field
+      private[EncoreSchemaFactory] def getPredPointer(record: R): R = record.predMap(index)
+
+      // Set predecessor pointer of record for the skip-list index of this field
+      private[EncoreSchemaFactory] def setPredPointer(record: R, value: R) {
+        record.predMap(index) = value
       }
     }
 
