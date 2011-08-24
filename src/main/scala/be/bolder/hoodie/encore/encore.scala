@@ -8,6 +8,7 @@ import math.Ordering
 import java.lang.{IllegalStateException, IllegalArgumentException}
 import collection.mutable.{HashSet, BitSet, PriorityQueue}
 import sun.jvm.hotspot.debugger.windbg.AddressDataSource
+import sun.jvm.hotspot.debugger.posix.elf.ELFSectionHeader
 
 // Nearest-neighbor search based on in-memory skip list
 //
@@ -76,11 +77,15 @@ object EncoreSchemaFactory extends SchemaFactory {
     // TODO: Refactor into ptrMap
     private[EncoreSchemaFactory] val predMap: Array[R] = new Array[R]( state.fieldCount )
 
-    // used to avoid data structure corruption by invalid use (at the expense of increased record size)
+    // Used to avoid data structure corruption by invalid use (at the expense of increased record size)
     private[EncoreSchemaFactory] var inserted = new BitSet( state.fieldCount )
 
     // Unique-per-schema number for this record
     private[EncoreSchemaFactory] var number: Int = -1
+  }
+
+  trait PeekingIterator extends Iterator[(Float, R)] {
+    def peek: Option[Float]
   }
 
   // PrimBuilder ties it all together; as fields get added their index and typeIndex fields are set
@@ -181,23 +186,40 @@ object EncoreSchemaFactory extends SchemaFactory {
       //
       // The iterator delivers the query point first
       //
-      def iterator(w: Float, query: R): Iterator[(Float, R)] = new Iterator[(Float, R)] {
+      def iterator(w: Float, query: R): PeekingIterator = new PeekingIterator {
           if (query eq null)
             throw new IllegalArgumentException("null query")
 
           val left  = predIterator(w, query)
           val right = succIterator(w, query)
 
-          def hasNext = left.hasNext || right.hasNext
+          private var buffer: Option[(Float, R)] = None
 
-          def next() = (if (left.hasNext) {
-                         if (right.hasNext) {
-                           if (left.dist < right.dist) left else right
-                         } else left
-                       } else right).next()
+          def hasNext = buffer.isDefined || left.hasNext || right.hasNext
+
+          private def fetchNext() = (if (left.hasNext) {
+                                       if (right.hasNext) {
+                                         if (left.dist < right.dist) left else right
+                                       } else left
+                                     } else right).next()
 
           // Skip initial duplicate query point
           if (hasNext) next()
+
+          def peek: Option[Float] = {
+            if (hasNext) {
+              if (buffer.isEmpty) buffer = Some(fetchNext())
+              Some(buffer.get._1)
+            } else None
+          }
+
+          def next() = {
+            if (buffer.isDefined) {
+              val result = buffer.get
+              buffer = None
+              result
+            } else fetchNext()
+          }
         }
 
       // If record has been inserted in this field's skip-list index, return it
@@ -435,88 +457,101 @@ object EncoreSchemaFactory extends SchemaFactory {
       if (weights.length != fields.length)
         throw new IllegalArgumentException("Invalid weights (wrong number of elements) provided")
 
+      // Maximum dimension distance seen from the iterator for field
       val maxDists = Array.ofDim[Float](fields.length)
 
-      val ordering    = Ordering.Float.reverse.on { (outer: (Float, R)) => outer._1}
-      val cands       = new PriorityQueue[(Float, R)]()(ordering)
-      val set: BitSet = new BitSet(size())
-      var cut         = Float.NegativeInfinity
-      var iters       = fields.zipWithIndex.map { case (field, i) =>
-        (field, field.iterator(weights(i), field.approx(query)))
-      }.filter( _._2.hasNext )
+      // Candidate records are sorted from lowest to highest weighted total distance
+      val candOrdering = Ordering.Float.reverse.on { (outer: (Float, R)) => outer._1}
+      val cands        = new PriorityQueue[(Float, R)]()(candOrdering)
+      val set: BitSet  = new BitSet(size())
+
+      // Candidate values closer to the query than this can be delivered
+      var cut          = 0.0f
+
+      // Iterators are sorted from highest to lowest weighted dimension distance
+      // (This brings up the cut as fast as possible)
+      val iterOrdering = Ordering.Float.on {
+        (iter: (F[_], PeekingIterator)) =>
+          val score = iter._2.peek
+          if (score.isDefined) score.get else Float.NegativeInfinity
+      }
+      val iters        = new PriorityQueue[(F[_], PeekingIterator)]()(iterOrdering)
+
+
+      for (iter <- fields.zipWithIndex.map {
+        case (field, i) => (field, field.iterator(weights(i), field.approx(query)))
+      }.filter( _._2.hasNext ))
+        iters.enqueue(iter)
+
       var addCount = 0
+
+      // Used to deliver results to the user that are <= cut in distance
+      // Return value of true indicates the user does not want further results
+      //
+      def deliver(): Boolean = {
+        addCount = 0
+        while (cands.nonEmpty) {
+          val elem = cands.head
+          if (elem._1 <= cut) {
+            cands.dequeue()
+            if (!cont(Some( (math.sqrt(elem._1.toDouble).toFloat, elem._2) )))
+              return true
+          } else {
+            return false
+          }
+        }
+        false
+      }
 
       while(iters.nonEmpty) {
         // Compute all next values, update maxDists, cut, and add to cands
-        for (entry <- iters) {
+        val entry   = iters.dequeue()
 
-          // Used to deliver results to the user that are <= cut in distance
-          // Return value of true indicates the user does not want further results
-          //
-          def deliver(): Boolean = {
-            addCount = 0
-            while (cands.nonEmpty) {
-              val elem = cands.head
-              if (elem._1 <= cut) {
-                cands.dequeue()
-                if (!cont(Some( (math.sqrt(elem._1.toDouble).toFloat, elem._2) )))
-                  return true
-              } else {
-                return false
-              }
+        val field   = entry._1
+        val i       = field.index
+        val iter    = entry._2
+
+        var adds    = false
+        var rec: R  = null
+        do {
+          val elem = iter.next()
+              rec  = elem._2
+              adds = !set(rec.number)
+
+          if (adds) {
+            val dimDist = elem._1
+            val dimSq = dimDist * dimDist
+            val maxSq = maxDists(i)
+
+            if (dimSq > maxSq) {
+              // Update cut value on the fly
+              cut        += (dimSq - maxSq)
+              maxDists(i) = dimSq
+
+              // Try to deliver since cut has increased
+              if (deliver())
+                return
             }
-            false
+            val recDist     = distanceSquare(weights, query, rec)
+            set(rec.number) = true
+
+            // Avoid cand queue: Instant delivery if <= cut value
+            val newCand = ((recDist, rec))
+            if (recDist <= cut) {
+              if (!cont(Some(newCand)))
+                return
+            }
+            // Add to queue otherwise
+            cands    += newCand
+            addCount += 1
           }
+        } while (!adds && iter.hasNext)
 
-          val field   = entry._1
-          val i       = field.index
-          val iter    = entry._2
+        if (iter.hasNext)
+          iters.enqueue((field, iter))
 
-          var adds    = false
-          var rec: R  = null
-          do {
-            val elem = iter.next()
-                rec  = elem._2
-                adds = !set(rec.number)
-
-            if (adds) {
-              val dimDist = elem._1
-              val dimSq = dimDist * dimDist
-              val maxSq = maxDists(i)
-
-              // if (dimSq < maxSq)
-              //   throw new IllegalStateException("Monotonicity violation")
-
-              if (dimSq > maxSq) {
-                // Update cut value on the fly
-                cut        += (maxSq - dimSq)
-                maxDists(i) = dimSq
-
-                // Try to deliver since cut has increased
-                if (deliver())
-                  return
-              }
-              val recDist     = distanceSquare(weights, query, rec)
-              set(rec.number) = true
-
-              // Avoid queue: Instant delivery if <= cut value
-              val newCand = ((recDist, rec))
-              if (recDist <= cut) {
-                if (!cont(Some(newCand)))
-                  return
-              }
-              // Add to queue otherwise
-              cands    += newCand
-              addCount += 1
-            }
-          } while (!adds && iter.hasNext)
-
-          if (addCount > sizeHint && deliver())
-            return
-        }
-
-        // Drop empty iterators for next round
-        iters = iters.filter( _._2.hasNext )
+        if (addCount > sizeHint && deliver())
+          return
       }
 
       // Deliver remaining results
