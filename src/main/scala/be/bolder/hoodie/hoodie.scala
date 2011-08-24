@@ -38,6 +38,8 @@ package hoodie {
 
 import reflect.Manifest
 import util.Random
+import com.sun.xml.internal.ws.developer.MemberSubmissionAddressing.Validation
+import java.net.DatagramSocketImpl
 
 // Stock symmetric WDMs for primitive types
 object PlainWDM {
@@ -89,7 +91,7 @@ abstract class Field[R, T](val name: String,
     set(record, parse(str))
   }
 
-  // Field distance defined for records
+  // *Field* distance defined for records
   def distance(w: Float, a:R, b: R): Float = wdm.distance(w, get(a), get(b))
 }
 
@@ -107,9 +109,10 @@ abstract class Schema[R] {
     for (i <- 0 until fields.length) {
       val field  = fields(i)
       val weight = weights(i)
-      dist += field.distance(weight, a, b)
+      val fieldDist = field.distance(weight, a, b)
+      dist += (fieldDist * fieldDist)
     }
-    dist
+    math.sqrt(dist)
   }
 
   def getAsString(record: R): String = fields.map( _.getAsString(record) ).mkString(separator)
