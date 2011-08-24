@@ -9,7 +9,7 @@ package object hoodie {
   type Weighting = IndexedSeq[Float]
 
   // "Weighted distance measure for values of type T"
-  // (like Ordering[T], just using a float based compare and separate equality check)
+  // (like Ordering[T], just using a float based compare and separate equality check due to precision problems)
   trait WDM[T] {
     def compare(a: T, b: T): Float
     def eq(a: T, b: T): Boolean

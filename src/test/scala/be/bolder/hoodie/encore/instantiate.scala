@@ -1,8 +1,7 @@
 package be.bolder.hoodie.encore
 
 import java.lang.Runtime
-import com.sun.xml.internal.ws.developer.MemberSubmissionAddressing.Validation
-import sun.awt.SunHints.Value
+import be.bolder.hoodie.encore.EncoreSchemaFactory.PrimRecord
 
 object EncoreInstantiates {
   def main(args: Array[String]) {
@@ -76,23 +75,97 @@ object EncoreIndexes {
         System.out.println(schema.getAsString(field_z.search(7)))
         System.out.println(schema.getAsString(field_t.search(3)))
         System.out.println(schema.getAsString(field_v.search(8)))
-
-
-        var score = 0.0f
-        var count = 0
-        for (value <- field_z.iterator(1.0f, field_z.search(5))) {
-          val newScore = value._1
-          if (newScore > score) {
-            score = newScore
-            System.out.println(newScore)
-          }
-          count += 1
-        }
-        System.out.println(count)
       }
   }
 }
 
+object EncoreIndexes2 {
+  def main(args: Array[String]) {
+      val schemaFactory = EncoreSchemaFactory
+
+      {
+        import be.bolder.hoodie.PlainIXS._
+        import be.bolder.hoodie.PlainWDM._
+
+        val builder = schemaFactory.newBuilder
+        val field_x = builder.addField[Int]("x")
+        val field_y = builder.addField[Int]("y")
+        val field_z = builder.addField[Int]("z")
+        val schema = builder.result
+
+        val len = 3
+
+        for (x <- 0.until(len))
+        for (y <- 0.until(len))
+        for (z <- 0.until(len))
+        {
+            val record = schema.mkRecord
+            field_x.set(record, x)
+            field_y.set(record, y)
+            field_z.set(record, z)
+            schema.insert(record)
+        }
+
+        val numRecs = len*len*len
+
+        var count = 0
+
+        val fst = field_z.head.get
+        var lst = fst
+        System.out.println("fst: " + fst)
+
+
+        System.out.println("1 >>>>")
+        for (value <- field_z.succIterator(1.0f, fst)) {
+          lst = value._2
+          System.out.println(value + " = " + field_z.get(value._2))
+          count += 1
+        }
+        System.out.println(numRecs)
+        System.out.println(count)
+
+
+        System.out.println("lst: " + lst)
+        System.out.println("2 >>>>")
+        count = 0
+        for (value <- field_z.predIterator(1.0f, lst)) {
+          System.out.println(value + " = " + field_z.get(value._2))
+          count += 1
+        }
+        System.out.println(numRecs)
+        System.out.println(count)
+
+        System.out.println("3 >>>>")
+        count = 0
+        for (value <- field_z.iterator(1.0f, field_z.search(1))) {
+          System.out.println(value + " = " + field_z.get(value._2))
+          count += 1
+        }
+        System.out.println(numRecs)
+        System.out.println(count)
+
+        System.out.println("4 >>>>")
+        count = 0
+        for (value <- field_z.iterator(1.0f, field_z.search(1))) {
+          System.out.println(value + " = " + field_z.get(value._2))
+          count += 1
+        }
+        System.out.println(numRecs)
+        System.out.println(count)
+
+        val start = field_x.search(2)
+        System.out.println("start: " + start + " = " + field_z.get(start))
+        System.out.println("5 >>>>")
+        count = 0
+        for (value <- field_z.iterator(1.0f, start)) {
+          System.out.println(value + " = " + field_z.get(value._2))
+          count += 1
+        }
+        System.out.println(numRecs)
+        System.out.println(count)
+      }
+  }
+}
 /*
 object BlueInstantiates {
 

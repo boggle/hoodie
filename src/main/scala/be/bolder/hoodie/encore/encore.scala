@@ -4,8 +4,7 @@ import be.bolder.hoodie._
 import scala.reflect.Manifest
 import collection.mutable.{BitSet}
 import collection.immutable.Queue
-import java.lang.IllegalArgumentException
-import runtime.FloatRef
+import java.lang.{IllegalStateException, IllegalArgumentException}
 
 // Nearest-neighbor search based on in-memory skip list
 //
@@ -31,16 +30,16 @@ object EncoreSchemaFactory extends SchemaFactory {
 
   // Static state used during schema building
   final class State {
-    // Totoal number of record fields
+    // Total number of record fields
     private[EncoreSchemaFactory] var fieldCount: Int = 0
 
-    // Totoal number of int record fields
+    // Total number of int record fields
     private[EncoreSchemaFactory] var intFieldCount: Int = 0
 
-    // Totoal number of bool record fields
+    // Total number of bool record fields
     private[EncoreSchemaFactory] var boolFieldCount: Int = 0
 
-    // Totoal number of float record fields
+    // Total number of float record fields
     private[EncoreSchemaFactory] var floatFieldCount: Int = 0
 
     // Skip list heads
@@ -115,50 +114,79 @@ object EncoreSchemaFactory extends SchemaFactory {
         }
       }
 
-      // Create a generator that starting from query produces all other records stored in the
-      // skip-list index of this field sorted according to w-weighted field distance
-      //
-      def iterator(w: Float, query: R): Iterator[(Float, R)] =
-        new Iterator[(Float, R)] {
-          var record = query
-          var dist   = 0.0f
+      // Iteration helper for PrimRecords
+      protected[EncoreSchemaFactory] sealed abstract class RecIterator(w: Float, query: R)
+        extends Iterator[(Float, R)] {
 
-          findNext()
+        var rec  = query
+        var dist = 0.0f
 
-          def hasNext = record != null
+        def nextRecord(aRec: R): R
 
-          override def next() = {
-            val result = (dist, record)
-            findNext()
-            result
-          }
-
-          private def findNext() {
-            val left  = getPredPointer(record)
-            val right = getForwardPointer(record, 0)
-
-            val left_distance = if (left eq null) 0.0f else distance(w, query, left)
-            val right_distance = if (right eq null) 0.0f else distance(w, query, right)
-
-            if (left eq null) {
-              record = right
-              dist   = right_distance
-            } else
-              if (right eq null) {
-                record = left
-                dist   = left_distance
-
-            } else
-              if (left_distance < right_distance) {
-                record = left
-                dist   = left_distance
-              } else {
-                record = right
-                dist   = right_distance
-              }
-          }
+        def findNext() {
+          rec = nextRecord(rec);
+          if (rec eq null)
+            dist = Float.MaxValue
+          else
+            dist = distance(w, query, rec)
         }
 
+        def hasNext = rec ne null
+
+        def next() = if (hasNext) {
+            val res = (dist, rec);
+            findNext();
+            res
+          } else throw new IllegalStateException("Exhausted")
+      }
+
+      // Create an iterator that starting from query produces all other records stored in the
+      // skip-list index that are smaller w.r.t to field value
+      //
+      // Iterator elements are pairs of (field distance to query, record)
+      //
+      // The iterator delivers the query point first
+      //
+      def predIterator(w: Float, query: R) = new RecIterator(w, query) {
+        def nextRecord(aRec: R) = pred(aRec)
+      }
+
+      // Create an iterator that starting from query produces all other records stored in the
+      // skip-list index that are larger w.r.t to field value
+      //
+      // Iterator elements are pairs of (field distance to query, record)
+      //
+      // The iterator delivers the query point first
+      //
+      def succIterator(w: Float, query: R) = new RecIterator(w, query) {
+        def nextRecord(aRec: R) = succ(aRec)
+      }
+
+      // Create an iterator that starting from query produces all other records stored in the
+      // skip-list index of this field sorted according to the w-weighted field distance
+      //
+      // Iterator elements are pairs of (field distance to query, record)
+      //
+      // The iterator delivers the query point first
+      //
+      def iterator(w: Float, query: R): Iterator[(Float, R)] = new Iterator[(Float, R)] {
+          val left  = predIterator(w, query)
+          val right = succIterator(w, query)
+          def hasNext = left.hasNext || right.hasNext
+
+          def next() = {
+            if (left.hasNext) {
+              if (right.hasNext) {
+                if (left.dist < right.dist) left.next() else right.next()
+              } else left.next()
+            } else right.next()
+          }
+
+          // Skip duplicate query point entry
+          next()
+        }
+
+      def head: Option[R] = if (state.levels(index) > 0) Some(state.heads(index)(0)) else None
 
       // Search for first record that has searchKey as value of this field in internal skip-list index and return it
       def search(searchKey: T): R = {
@@ -197,7 +225,6 @@ object EncoreSchemaFactory extends SchemaFactory {
           throw new IllegalArgumentException("Record already inserted")
 
         val head: Array[PrimRecord] = state.heads(index)
-        var pred: R = null
         val headLevel = state.levels(index)
 
         var node: Array[R] = head
@@ -207,8 +234,8 @@ object EncoreSchemaFactory extends SchemaFactory {
         var i = headLevel
 
         // unless list is empty
+        var keyNode: R = null
         if (i > 0) {
-          var keyNode: R = null
           var alreadyChecked: R = null
           do {
             i -= 1
@@ -216,7 +243,6 @@ object EncoreSchemaFactory extends SchemaFactory {
             keyNode = node(i)
             while (keyNode != null && alreadyChecked != keyNode && wdm.lt(get(keyNode), searchKey)) {
               node    = getForwardPointers(keyNode)
-              pred    = keyNode
               keyNode = node(i)
             }
             alreadyChecked = keyNode
@@ -228,7 +254,7 @@ object EncoreSchemaFactory extends SchemaFactory {
 
         // we insert duplicates, so no update of existing node happens here
         // perhaps should get smarter about handling duplicates, though and keep them in a separate list
-        // in order to be able to skip ahead to the next element
+        // in order to be able to skip ahead to the next record with a larger field value
 
         val newLevel = randomLevel()
         if (newLevel > headLevel) {
@@ -245,6 +271,8 @@ object EncoreSchemaFactory extends SchemaFactory {
           recordForwardPointers(i) = update(i)(i)
           update(i)(i) = record
         }
+        if (keyNode ne null)
+          setPredPointer(keyNode, record)
         record.inserted(index) = true
       }
 
@@ -256,6 +284,12 @@ object EncoreSchemaFactory extends SchemaFactory {
         } while (level < MAX_LEVEL && math.random < 0.25d)
         level
       }
+
+      // Predecessor in skip-list for this field
+      def pred(record: R): R = getPredPointer(record)
+
+      // Successor in skip-list for this field
+      def succ(record: R): R = getForwardPointer(record, 0)
 
       // Get ith forward pointer of record for skip-list index of this field
       private[EncoreSchemaFactory] def getForwardPointer(record: R, i: Int): R = {
@@ -286,7 +320,7 @@ object EncoreSchemaFactory extends SchemaFactory {
         }
         else
           if (pointers.length < minLevels) {
-            val newSize = math.min(math.max(minLevels, pointers.length * 2), MAX_LEVEL)
+            val newSize = math.min(minLevels, MAX_LEVEL)
             val newPointers = Array.ofDim[R](newSize)
             Array.copy(pointers, 0, newPointers, 0, pointers.length)
             setForwardPointers(record, newPointers)
