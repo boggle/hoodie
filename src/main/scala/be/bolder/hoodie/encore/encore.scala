@@ -407,6 +407,10 @@ object EncoreSchemaFactory extends SchemaFactory {
   final class PrimSchema(val fields: IndexedSeq[F[_]], val state: State) extends Schema[PrimRecord] {
     override type F[T] = EncoreSchemaFactory.this.F[T]
 
+    private var numInserted = 0
+
+    def size(): Int = numInserted
+
     def mkRecord: R = new PrimRecord(state)
 
     def mkFromString(lineStr: String): R = {
@@ -419,10 +423,11 @@ object EncoreSchemaFactory extends SchemaFactory {
     def insert(record: R) {
       for (field <- fields)
         field.insert(record)
+      numInserted += 1
     }
 
     // Retrieve nearest neighbors of record using the given weighting
-    def search(weights: Weighting, query: R)(cont: Option[(Float, R)] => Boolean) {
+    def search(weights: Weighting, query: R, sizeHint: Int)(cont: Option[(Float, R)] => Boolean) {
       if (weights.length != fields.length)
         throw new IllegalArgumentException("Invalid weights (wrong number of elements) provided")
 
@@ -435,10 +440,29 @@ object EncoreSchemaFactory extends SchemaFactory {
       var iters    = fields.zipWithIndex.map { case (field, i) =>
         (field, field.iterator(weights(i), field.approx(query)))
       }.filter( _._2.hasNext )
+      var addCount = 0
 
       while(iters.nonEmpty) {
         // Compute all next values, update maxDists, and add to cands
         for (entry <- iters) {
+
+          // Used to deliver results to the user that are <= cut in distance
+          // Retvalue of true indicates the user does not want further results
+          //
+          def deliver(): Boolean = {
+            while (cands.nonEmpty) {
+              val elem = cands.head
+              if (elem._1 <= cut) {
+                cands.dequeue()
+                if (!cont(Some( (math.sqrt(elem._1.toDouble).toFloat, elem._2) )))
+                  return true
+              } else {
+                return false
+              }
+            }
+            false
+          }
+
           val field   = entry._1
           val i       = field.index
           val iter    = entry._2
@@ -452,32 +476,36 @@ object EncoreSchemaFactory extends SchemaFactory {
 
             if (adds) {
               val dimDist = elem._1
-              // if (dimDist < maxDists(i))
-              //   throw new IllegalStateException("Monotonicity violation")
               val dimSq = dimDist * dimDist
               val maxSq = maxDists(i)
+
+              if (dimSq < maxSq)
+                 throw new IllegalStateException("Monotonicity violation")
+
               if (dimSq > maxSq) {
                 // Update cut value on the fly
                 cut        += (maxSq - dimSq)
                 maxDists(i) = dimSq
+
+                if (deliver())
+                  return
               }
               val recDist = distanceSquare(weights, query, rec)
-              set   += rec
-              cands += ((recDist, rec))
+              set        += rec
+
+              // Instant delivery if <= cut value
+              val newCand = ((recDist, rec))
+              if (recDist <= cut) {
+                if (!cont(Some(newCand)))
+                  return
+              }
+              // Add to queue otherwise
+              cands    += newCand
+              addCount += 1
             }
           } while (!adds && iter.hasNext)
         }
 
-        breakable { while (cands.nonEmpty) {
-          val elem = cands.dequeue()
-          if (elem._1 <= cut) {
-            if (!cont(Some( (math.sqrt(elem._1.toDouble).toFloat, elem._2) )))
-              return
-          } else {
-            cands += elem
-            break
-          }
-        } }
 
         // Drop empty iterators for next round
         iters = iters.filter( _._2.hasNext )
@@ -494,5 +522,6 @@ object EncoreSchemaFactory extends SchemaFactory {
       cont(None)
     }
   }
+
 }
 

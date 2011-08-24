@@ -146,7 +146,7 @@ abstract class Schema[R] {
   // Results are delivered to cont which by returning true may request more results.  None indicates that there are
   // no more results available to cont
   //
-  def search(weights: Weighting, query: R)(cont: Option[(Float, R)] => Boolean)
+  def search(weights: Weighting, query: R, sizeHint: Int)(cont: Option[(Float, R)] => Boolean)
 
 
   // Retrieve k nearest neighbors of query using the given weighting
@@ -154,7 +154,7 @@ abstract class Schema[R] {
   def searchK[That](weights: Weighting, query: R, k: Int)(implicit cbf: CanBuildFrom[_,(Float,R), That]): That = {
     val builder = cbf()
     var count   = k
-    search(weights, query){ input => input match {
+    search(weights, query, k){ input => input match {
       case Some(value) =>
         builder += value
         count   -= 1
@@ -164,6 +164,8 @@ abstract class Schema[R] {
     }}
     builder.result()
   }
+
+  def size(): Int
 }
 
 

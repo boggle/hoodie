@@ -193,7 +193,7 @@ object EncoreSearches {
       System.out.println("")
       System.out.println("!")
       System.out.println("1 >>>>> ")
-      schema.search(Array.fill(schema.fields.length)(1.0f), center){ input => input match {
+      schema.search(Array.fill(schema.fields.length)(1.0f), center, 0){ input => input match {
           case Some(value) => System.out.println(value + " = " + schema.getAsString(value._2))
           case None => System.out.println("Done.")
         }
@@ -203,7 +203,7 @@ object EncoreSearches {
       System.out.println("")
       System.out.println("!")
       System.out.println("2 >>>>> ")
-      schema.search(Array(1.0f, 0.5f, 2.5f), center){ input => input match {
+      schema.search(Array(1.0f, 0.5f, 2.5f), center, 0){ input => input match {
           case Some(value) => System.out.println(value + " = " + schema.getAsString(value._2))
           case None => System.out.println("Done.")
         }
@@ -259,14 +259,25 @@ object EncoreSearches2 {
           schema.insert(record)
       }
 
-      val times = 50
-      val start = Platform.currentTime
-      for (i <- 0.until(times)) {
-        schema.searchK[Set[(Float, EncoreSchemaFactory.R)]](Array(1.0f, 1.0f, 1.0f, 1.0f, 1.0f), center, 20)
+      {
+        val times = 50
+        val start = Platform.currentTime
+        for (i <- 0.until(times)) {
+          schema.searchK[Set[(Float, EncoreSchemaFactory.R)]](Array(1.0f, 1.0f, 1.0f, 1.0f, 1.0f), center, 20)
+        }
+        val end = Platform.currentTime
+        System.out.println ( (end - start) / times )
       }
-      val end = Platform.currentTime
-      System.out.println ( (end - start) / times )
 
+      {
+        val times = 50
+        val start = Platform.currentTime
+        for (i <- 0.until(times)) {
+          schema.searchK[Set[(Float, EncoreSchemaFactory.R)]](Array(1.0f, 1.0f, 1.0f, 1.0f, 0.001f), center, 20)
+        }
+        val end = Platform.currentTime
+        System.out.println ( (end - start) / times )
+      }
     }
   }
 
