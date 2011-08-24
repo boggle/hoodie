@@ -125,11 +125,13 @@ Weights: The skip list indices sort records unweighted. However, since we only a
 TODO
 ----
 
-- Make it work (search still has a bug the order is only "mostly correct")
-- Search from non-inserted point
-- Little http server for accessing
-- Delete (?)
-- Batching of updates
+- [ ] Verify dimSize
+- [X] Make it work (search still has a bug the order is only "mostly correct")
+- [?] Search from non-inserted point (untested)
+- [ ] Little http server for accessing
+- [ ] Delete
+- [ ] Batching of updates
+- [ ]ÊGetter for number of elements
 
 
 

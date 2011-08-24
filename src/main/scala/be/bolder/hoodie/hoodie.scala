@@ -35,6 +35,7 @@ import reflect.Manifest
 import util.Random
 import com.sun.xml.internal.ws.developer.MemberSubmissionAddressing.Validation
 import java.net.DatagramSocketImpl
+import collection.generic.{Growable, CanBuildFrom}
 
 // Stock symmetric WDMs for primitive types
 object PlainWDM {
@@ -140,8 +141,29 @@ abstract class Schema[R] {
   def insert(record: R)
 
 
-  // Retrieve nearest neighbors of record using the given weighting
+  // Retrieve nearest neighbors of query using the given weighting
+  //
+  // Results are delivered to cont which by returning true may request more results.  None indicates that there are
+  // no more results available to cont
+  //
   def search(weights: Weighting, query: R)(cont: Option[(Float, R)] => Boolean)
+
+
+  // Retrieve k nearest neighbors of query using the given weighting
+  //
+  def searchK[That](weights: Weighting, query: R, k: Int)(implicit cbf: CanBuildFrom[_,(Float,R), That]): That = {
+    val builder = cbf()
+    var count   = k
+    search(weights, query){ input => input match {
+      case Some(value) =>
+        builder += value
+        count   -= 1
+        if (count > 0) true else false
+      case None =>
+        false
+    }}
+    builder.result()
+  }
 }
 
 

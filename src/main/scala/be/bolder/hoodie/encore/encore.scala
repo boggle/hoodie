@@ -7,6 +7,7 @@ import util.control.Breaks._
 import math.Ordering
 import java.lang.{IllegalStateException, IllegalArgumentException}
 import collection.mutable.{HashSet, BitSet, PriorityQueue}
+import sun.jvm.hotspot.debugger.windbg.AddressDataSource
 
 // Nearest-neighbor search based on in-memory skip list
 //
@@ -49,6 +50,9 @@ object EncoreSchemaFactory extends SchemaFactory {
 
     // Skip list max level of head nodes (1-based)
     private[EncoreSchemaFactory] var levels: Array[Int] = null
+
+    // Marker array buffer
+    // private[EncoreSchemaFactory] var abuf
   }
 
   // PrimRecords aggregate field values by type into arrays
@@ -192,6 +196,11 @@ object EncoreSchemaFactory extends SchemaFactory {
           // Skip initial duplicate query point
           if (hasNext) next()
         }
+
+      // If record has been inserted in this field's skip-list index, return it
+      // Otherwise, searches for an arbitrary record with the same field value (i.e. calls search(get(record)))
+      //
+      def approx(record: R): R = if (record.inserted(index)) record else search(get(record))
 
       def head: Option[R] = if (state.levels(index) > 0) Some(state.heads(index)(0)) else None
 
@@ -422,38 +431,49 @@ object EncoreSchemaFactory extends SchemaFactory {
       val ordering = Ordering.Float.reverse.on { (outer: (Float, R)) => outer._1}
       val cands    = new PriorityQueue[(Float, R)]()(ordering)
       val set      = new HashSet[R]()
-      var iters    = fields.zipWithIndex.map { case (field, i) => (field, field.iterator(weights(i), query)) }
-          iters    = iters.filter( _._2.hasNext )
+      var cut      = Float.NegativeInfinity
+      var iters    = fields.zipWithIndex.map { case (field, i) =>
+        (field, field.iterator(weights(i), field.approx(query)))
+      }.filter( _._2.hasNext )
 
       while(iters.nonEmpty) {
         // Compute all next values, update maxDists, and add to cands
         for (entry <- iters) {
           val field   = entry._1
           val i       = field.index
-          val elem    = entry._2.next()
-          val dimDist = elem._1
-          // if (dimDist < maxDists(i))
-          //   throw new IllegalStateException("Monotonicity violation")
-          maxDists(i) = math.max(maxDists(i), dimDist * dimDist)
-          val rec     = elem._2
-          val recDist = distanceSquare(weights, query, rec)
-          if (! set.contains(rec)) {
-            set   += rec
-            cands += ((recDist, rec))
-          }
-        }
+          val iter    = entry._2
 
-        // Compute cut value using euclidian distance
-        // (We don't need to add weighting here as this happens in the iterators)
-        val cut = maxDists.reduceLeft( _+_ )
+          var adds    = false
+          var rec: R  = null
+          do {
+            val elem = iter.next()
+                rec  = elem._2
+                adds = !set.contains(rec)
+
+            if (adds) {
+              val dimDist = elem._1
+              // if (dimDist < maxDists(i))
+              //   throw new IllegalStateException("Monotonicity violation")
+              val dimSq = dimDist * dimDist
+              val maxSq = maxDists(i)
+              if (dimSq > maxSq) {
+                // Update cut value on the fly
+                cut        += (maxSq - dimSq)
+                maxDists(i) = dimSq
+              }
+              val recDist = distanceSquare(weights, query, rec)
+              set   += rec
+              cands += ((recDist, rec))
+            }
+          } while (!adds && iter.hasNext)
+        }
 
         breakable { while (cands.nonEmpty) {
           val elem = cands.dequeue()
-          if (elem._1 < cut) {
-            set -= elem._2
-            cont(Some( (math.sqrt(elem._1.toDouble).toFloat, elem._2) ))
+          if (elem._1 <= cut) {
+            if (!cont(Some( (math.sqrt(elem._1.toDouble).toFloat, elem._2) )))
+              return
           } else {
-            set   += elem._2
             cands += elem
             break
           }

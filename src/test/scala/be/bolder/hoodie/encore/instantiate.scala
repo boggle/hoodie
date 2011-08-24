@@ -3,6 +3,7 @@ package be.bolder.hoodie.encore
 import java.lang.Runtime
 import be.bolder.hoodie.encore.EncoreSchemaFactory.PrimRecord
 import com.sun.tools.internal.ws.wsdl.document.Input
+import compat.Platform
 
 object EncoreInstantiates {
   def main(args: Array[String]) {
@@ -189,12 +190,84 @@ object EncoreSearches {
           schema.insert(record)
       }
 
+      System.out.println("")
+      System.out.println("!")
+      System.out.println("1 >>>>> ")
       schema.search(Array.fill(schema.fields.length)(1.0f), center){ input => input match {
           case Some(value) => System.out.println(value + " = " + schema.getAsString(value._2))
           case None => System.out.println("Done.")
         }
         true
       }
+
+      System.out.println("")
+      System.out.println("!")
+      System.out.println("2 >>>>> ")
+      schema.search(Array(1.0f, 0.5f, 2.5f), center){ input => input match {
+          case Some(value) => System.out.println(value + " = " + schema.getAsString(value._2))
+          case None => System.out.println("Done.")
+        }
+        true
+      }
+
+      val times = 500
+      val start = Platform.currentTime
+      for (i <- 0.until(times)) {
+        schema.searchK[Set[(Float, EncoreSchemaFactory.R)]](Array(1.0f, 1.0f, 1.0f), center, 20)
+      }
+      val end = Platform.currentTime
+      System.out.println ( (end - start) / times )
+
     }
   }
+}
+
+object EncoreSearches2 {
+  def main(args: Array[String]) {
+    val schemaFactory = EncoreSchemaFactory
+
+    {
+      import be.bolder.hoodie.PlainIXS._
+      import be.bolder.hoodie.PlainWDM._
+
+      val builder = schemaFactory.newBuilder
+      val field_x = builder.addField[Int]("x")
+      val field_y = builder.addField[Int]("y")
+      val field_z = builder.addField[Int]("z")
+      val field_v = builder.addField[Int]("v")
+      val field_t = builder.addField[Int]("t")
+      val schema = builder.result
+
+      val len = 9
+
+      var center: EncoreSchemaFactory.R = null
+
+      for (x <- 0.until(len))
+      for (y <- 0.until(len))
+      for (z <- 0.until(len))
+      for (v <- 0.until(len))
+      for (t <- 0.until(len))
+      {
+          val record = schema.mkRecord
+          field_x.set(record, x)
+          field_y.set(record, y)
+          field_z.set(record, z)
+          field_v.set(record, v)
+          field_t.set(record, t)
+          if (x == 4 && y == 4 && z == 4 && v == 4 && t == 4)
+            center = record
+          schema.insert(record)
+      }
+
+      val times = 50
+      val start = Platform.currentTime
+      for (i <- 0.until(times)) {
+        schema.searchK[Set[(Float, EncoreSchemaFactory.R)]](Array(1.0f, 1.0f, 1.0f, 1.0f, 1.0f), center, 20)
+      }
+      val end = Platform.currentTime
+      System.out.println ( (end - start) / times )
+
+    }
+  }
+
 }
