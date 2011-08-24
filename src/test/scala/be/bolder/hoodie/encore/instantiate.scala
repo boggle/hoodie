@@ -32,155 +32,129 @@ object EncoreInstantiates {
 
 object EncoreIndexes {
   def main(args: Array[String]) {
-      val schemaFactory = EncoreSchemaFactory
+    val schemaFactory = EncoreSchemaFactory
 
-      {
-        import be.bolder.hoodie.PlainIXS._
-        import be.bolder.hoodie.PlainWDM._
+    {
+      import be.bolder.hoodie.PlainIXS._
+      import be.bolder.hoodie.PlainWDM._
 
-        val builder = schemaFactory.newBuilder
-        val field_x = builder.addField[Int]("x")
-        val field_y = builder.addField[Int]("y")
-        val field_z = builder.addField[Int]("z")
-        val field_t = builder.addField[Int]("t")
-        val field_v = builder.addField[Int]("v")
-        val schema = builder.result
+      val builder = schemaFactory.newBuilder
+      val field_x = builder.addField[Int]("x")
+      val field_y = builder.addField[Int]("y")
+      val field_z = builder.addField[Int]("z")
+      val field_t = builder.addField[Int]("t")
+      val field_v = builder.addField[Int]("v")
+      val schema = builder.result
 
-        val len = 10
+      val len = 10
 
-        val runtime = Runtime.getRuntime()
-        val memBefore = runtime.freeMemory()
+      val runtime = Runtime.getRuntime()
+      val memBefore = runtime.freeMemory()
 
-        for (x <- 0.until(len))
-          for (y <- 0.until(len))
-            for (z <- 0.until(len))
-              for (t <- 0.until(len))
-                for (v <- 0.until(len)) {
-                  val record = schema.mkRecord
-                  field_x.set(record, x)
-                  field_y.set(record, y)
-                  field_z.set(record, z)
-                  field_t.set(record, t)
-                  field_v.set(record, v)
-                  schema.insert(record)
-                }
+      for (x <- 0.until(len))
+        for (y <- 0.until(len))
+          for (z <- 0.until(len))
+            for (t <- 0.until(len))
+              for (v <- 0.until(len)) {
+                val record = schema.mkRecord
+                field_x.set(record, x)
+                field_y.set(record, y)
+                field_z.set(record, z)
+                field_t.set(record, t)
+                field_v.set(record, v)
+                schema.insert(record)
+              }
 
-        val numRecs = len*len*len*len*len
-        val memAfter = runtime.freeMemory()
-        System.out.println( (memBefore-memAfter) / numRecs )
+      val numRecs = len*len*len*len*len
+      val memAfter = runtime.freeMemory()
+      System.out.println( (memBefore-memAfter) / numRecs )
 
-        val record = schema.mkRecord
-        System.out.println(schema.getAsString(field_x.search(4)))
-        System.out.println(schema.getAsString(field_y.search(6)))
-        System.out.println(schema.getAsString(field_z.search(7)))
-        System.out.println(schema.getAsString(field_t.search(3)))
-        System.out.println(schema.getAsString(field_v.search(8)))
-      }
+      val record = schema.mkRecord
+      System.out.println(schema.getAsString(field_x.search(4)))
+      System.out.println(schema.getAsString(field_y.search(6)))
+      System.out.println(schema.getAsString(field_z.search(7)))
+      System.out.println(schema.getAsString(field_t.search(3)))
+      System.out.println(schema.getAsString(field_v.search(8)))
+    }
   }
 }
 
 object EncoreIndexes2 {
   def main(args: Array[String]) {
-      val schemaFactory = EncoreSchemaFactory
-
-      {
-        import be.bolder.hoodie.PlainIXS._
-        import be.bolder.hoodie.PlainWDM._
-
-        val builder = schemaFactory.newBuilder
-        val field_x = builder.addField[Int]("x")
-        val field_y = builder.addField[Int]("y")
-        val field_z = builder.addField[Int]("z")
-        val schema = builder.result
-
-        val len = 3
-
-        for (x <- 0.until(len))
-        for (y <- 0.until(len))
-        for (z <- 0.until(len))
-        {
-            val record = schema.mkRecord
-            field_x.set(record, x)
-            field_y.set(record, y)
-            field_z.set(record, z)
-            schema.insert(record)
-        }
-
-        val numRecs = len*len*len
-
-        var count = 0
-
-        val fst = field_x.head.get
-        var lst = fst
-        System.out.println("fst: " + fst)
-
-
-        System.out.println("1 >>>>")
-        for (value <- field_x.succIterator(1.0f, fst)) {
-          lst = value._2
-          System.out.println(value + " = " + field_x.get(value._2))
-          count += 1
-        }
-        System.out.println(numRecs)
-        System.out.println(count)
-
-
-        System.out.println("lst: " + lst)
-        System.out.println("2 >>>>")
-        count = 0
-        for (value <- field_x.predIterator(1.0f, lst)) {
-          System.out.println(value + " = " + field_x.get(value._2))
-          count += 1
-        }
-        System.out.println(numRecs)
-        System.out.println(count)
-
-        System.out.println("3 >>>>")
-        count = 0
-        for (value <- field_x.iterator(1.0f, field_x.search(1))) {
-          System.out.println(value + " = " + field_x.get(value._2))
-          count += 1
-        }
-        System.out.println(numRecs)
-        System.out.println(count)
-
-        System.out.println("4 >>>>")
-        count = 0
-        for (value <- field_z.iterator(1.0f, field_z.search(1))) {
-          System.out.println(value + " = " + field_z.get(value._2))
-          count += 1
-        }
-        System.out.println(numRecs)
-        System.out.println(count)
-
-        val start = field_x.search(2)
-        System.out.println("start: " + start + " = " + field_z.get(start))
-        System.out.println("5 >>>>")
-        count = 0
-        for (value <- field_z.iterator(1.0f, start)) {
-          System.out.println(value + " = " + field_z.get(value._2))
-          count += 1
-        }
-        System.out.println(numRecs)
-        System.out.println(count)
-      }
-  }
-}
-/*
-object BlueInstantiates {
-
-  def main(args: Array[String]) {
-    val graph = TinkerGraphFactory.createTinkerGraph()
-    val schemaFactory = new BlueSchemaFactory[Graph](graph)
+    val schemaFactory = EncoreSchemaFactory
 
     {
-      import schemaFactory.mkField
       import be.bolder.hoodie.PlainIXS._
       import be.bolder.hoodie.PlainWDM._
 
-      val schema = schemaFactory.mkSchema(mkField[Int]("age"), mkField[Boolean]("bald"), mkField[Float]("size"))
+      val builder = schemaFactory.newBuilder
+      val field_x = builder.addField[Int]("x")
+      val field_y = builder.addField[Int]("y")
+      val field_z = builder.addField[Int]("z")
+      val schema = builder.result
+
+      val len = 4
+      var numRecs = 0
+
+      for (x <- 0.until(len))
+      for (y <- 0.until(len))
+      for (z <- 0.until(len))
+      {
+          val record = schema.mkRecord
+          field_x.set(record, x)
+          field_y.set(record, y)
+          field_z.set(record, z)
+          System.out.println(schema.getAsString(record))
+          schema.insert(record)
+          numRecs += 1
+      }
+
+      val last = new collection.mutable.HashMap[String, (Float, PrimRecord)]
+      for (field <- schema.fields) {
+        System.out.println("Testing field " + field.name + " succ monotonicity")
+
+        var count        = 0
+        val fst          = field.head.get
+        last(field.name) = (0.0f, fst)
+        for (value <- field.succIterator(1.0f, fst)) {
+          if (value._1 < last(field.name)._1)
+            System.out.print("!!!!!!!! ")
+          val pred = field.pred(value._2)
+          System.out.println(value + " = " + schema.getAsString(value._2) + "; pred = " +
+            (if (pred eq null) "null" else pred.toString))
+          last(field.name) = value
+          count += 1
+        }
+      }
+
+      for (field <- schema.fields) {
+        System.out.println("Testing field " + field.name + " pred monotonicity")
+
+        var count = 0
+        var prev  = (0.0f, last(field.name)._2)
+        for (value <- field.predIterator(1.0f, prev._2)) {
+          if (value._1 < prev._1)
+            System.out.print("!!!!!!!! ")
+          System.out.println(value + " = " + schema.getAsString(value._2))
+          prev = value
+          count += 1
+        }
+      }
+
+      for (field <- schema.fields) {
+        System.out.println("Testing field " + field.name + " join monotonicity")
+
+        var count = 0
+        val start: EncoreSchemaFactory.R = field.retypeField(scala.reflect.Manifest.Int).get.search(2)
+        var prev  = (0.0f, start)
+        for (value <- field.iterator(1.0f, prev._2)) {
+          if (value._1 < prev._1)
+            System.out.print("!!!!!!!! ")
+          System.out.println(value + " = " + schema.getAsString(value._2))
+          prev = value
+          count += 1
+        }
+      }
     }
   }
 }
-
-*/

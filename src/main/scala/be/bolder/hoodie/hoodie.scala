@@ -11,18 +11,13 @@ package object hoodie {
   // "Weighted distance measure for values of type T"
   // (like Ordering[T], just using a float based compare and separate equality check due to precision problems)
   trait WDM[T] {
-    def compare(a: T, b: T): Float
     def eq(a: T, b: T): Boolean
+
+    def compare(a: T, b: T): Float
 
     def distance(w: Float, a: T, b: T): Float = math.abs(compare(a, b)) * math.abs(w)
 
-    def neq(a: T, b: T): Boolean = !eq(a, b)
-
-    def lt(a: T, b: T) = !eq(a, b) && compare(a,b) < 0
-    def gt(a: T, b: T) = !eq(a, b) && compare(a,b) > 0
-
-    def leq(a: T, b: T) = eq(a, b) || compare(a,b) < 0
-    def geq(a: T, b: T) = eq(a, b) || compare(a,b) > 0
+    def lt(a: T, b: T) = compare(a,b) < 0.0f
   }
 
 
@@ -44,18 +39,18 @@ import java.net.DatagramSocketImpl
 // Stock symmetric WDMs for primitive types
 object PlainWDM {
   implicit object intWDM extends WDM[Int] {
-    def compare(a: Int, b: Int): Float = (b-a).toFloat
+    def compare(a: Int, b: Int): Float = (a-b).toFloat
     def eq(a: Int, b: Int): Boolean = a == b
   }
 
   implicit object floatWDM extends WDM[Float] {
-    def compare(a: Float, b: Float): Float = (b-a).toFloat
+    def compare(a: Float, b: Float): Float = (a-b).toFloat
     def eq(a: Float, b: Float): Boolean = a == b
   }
 
 
   implicit object boolWDM extends WDM[Boolean] {
-    def compare(a: Boolean, b: Boolean): Float = if (b) (if (a) 0.0f else 1.0f) else (if (a) -1.0f else 0.0f)
+    def compare(a: Boolean, b: Boolean): Float = if (a) (if (b) 0.0f else 1.0f) else (if (b) -1.0f else 0.0f)
     def eq(a: Boolean, b: Boolean): Boolean = a && b
   }
 }
@@ -76,6 +71,8 @@ object PlainIXS {
 abstract class Field[R, T](val name: String,
                            implicit val ixs: IXS[T], implicit val wdm: WDM[T], implicit val mf: Manifest[T]) {
 
+  type F[T] <: Field[R, T]
+
   def get(record: R): T
   def set(record: R, value: T)
 
@@ -93,6 +90,10 @@ abstract class Field[R, T](val name: String,
 
   // *Field* distance defined for records
   def distance(w: Float, a:R, b: R): Float = wdm.distance(w, get(a), get(b))
+
+
+  def retypeField[S](mf2: Manifest[S]): Option[F[S]] =
+    if (mf <:< mf2) Some(this.asInstanceOf[F[S]]) else None
 }
 
 

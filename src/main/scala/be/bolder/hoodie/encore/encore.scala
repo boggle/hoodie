@@ -4,7 +4,8 @@ import be.bolder.hoodie._
 import scala.reflect.Manifest
 import collection.mutable.{BitSet}
 import collection.immutable.Queue
-import java.lang.{IllegalStateException, IllegalArgumentException}
+import com.sun.org.apache.xpath.internal.operations.Neg
+import java.lang.{IllegalArgumentException, IllegalStateException}
 
 // Nearest-neighbor search based on in-memory skip list
 //
@@ -81,8 +82,11 @@ object EncoreSchemaFactory extends SchemaFactory {
     private var fields = Queue.newBuilder[F[_]]
 
     // PrimFields keep track of index and type index to store values into corresponding PrimRecord array slots
-    class PrimField[T](aName: String, state: State)(implicit anIxs: IXS[T], aWdm: WDM[T], aMf: Manifest[T])
+    // TODO: Pull one level up
+    final class PrimField[T](aName: String, state: State)(implicit anIxs: IXS[T], aWdm: WDM[T], aMf: Manifest[T])
       extends Field[R, T](aName, anIxs, aWdm, aMf) {
+
+      override type F[T] = PrimField[T]
 
       val index = state.fieldCount
 
@@ -170,53 +174,51 @@ object EncoreSchemaFactory extends SchemaFactory {
       // The iterator delivers the query point first
       //
       def iterator(w: Float, query: R): Iterator[(Float, R)] = new Iterator[(Float, R)] {
+          if (query eq null)
+            throw new IllegalArgumentException("null query")
+
           val left  = predIterator(w, query)
           val right = succIterator(w, query)
+
           def hasNext = left.hasNext || right.hasNext
 
-          def next() = {
-            if (left.hasNext) {
-              if (right.hasNext) {
-                if (left.dist < right.dist) left.next() else right.next()
-              } else left.next()
-            } else right.next()
-          }
+          def next() = (if (left.hasNext) {
+                         if (right.hasNext) {
+                           if (left.dist < right.dist) left else right
+                         } else left
+                       } else right).next()
 
-          // Skip duplicate query point entry
-          next()
+          // Skip initial duplicate query point
+          if (hasNext) next()
         }
 
       def head: Option[R] = if (state.levels(index) > 0) Some(state.heads(index)(0)) else None
 
       // Search for first record that has searchKey as value of this field in internal skip-list index and return it
       def search(searchKey: T): R = {
-        var node: Array[R] = state.heads(index)
+        val listHeader: Array[R] = state.heads(index)
+        val listLevel            = state.levels(index)
 
-        var i = state.levels(index)
-        var keyNode: R = null
+        var x: R                 = null
+        var x_forwards: Array[R] = listHeader
+        var i                    = listLevel
+        var alreadyChecked: R    = null
 
-        // empty list special case
-        if (i == 0)
-          return null
-
-        var alreadyChecked: R = null
         do {
-          i -= 1
-
-          keyNode = node(i)
-          while (keyNode != null && keyNode != alreadyChecked && wdm.lt(get(keyNode), searchKey)) {
-            node = getForwardPointers(keyNode)
-            keyNode = node(i)
+          // && keyNode != alreadyChecked
+          while ((x_forwards(i) ne null) && (x_forwards(i) ne alreadyChecked) && wdm.lt(get(x_forwards(i)), searchKey))
+          {
+            x          = x_forwards(i)
+            x_forwards = getForwardPointers(x)
           }
-          alreadyChecked = keyNode
-        } while (i > 0)
+          alreadyChecked = x_forwards(i)
 
-        if (keyNode eq null)
-          null
-        else {
-          val key = get(keyNode)
-          if (wdm.eq(key, searchKey)) keyNode else null
-        }
+          i -= 1
+        } while (i >= 0)
+
+        x = x_forwards(0)
+
+        if ((x ne null) && wdm.eq(get(x), searchKey)) x else null
       }
 
       // Insert record into internal skip-list index for field using the record's value of field
@@ -224,60 +226,62 @@ object EncoreSchemaFactory extends SchemaFactory {
         if (record.inserted(index))
           throw new IllegalArgumentException("Record already inserted")
 
-        val head: Array[PrimRecord] = state.heads(index)
-        val headLevel = state.levels(index)
+        val listHeader: Array[R] = state.heads(index)
+        val listLevel            = state.levels(index)
 
-        var node: Array[R] = head
-        var update: Array[SkipNode] = Array.ofDim(MAX_LEVEL)
-        val searchKey: T = get(record)
+        val searchKey: T            = get(record)
+        val update: Array[SkipNode] = Array.ofDim(MAX_LEVEL)
 
-        var i = headLevel
+        var x: R                 = null
+        var x_forwards: Array[R] = listHeader
+        var i                    = listLevel
+        var alreadyChecked: R    = null
+        do {
+          while ((x_forwards(i) ne null) && (x_forwards(i) ne alreadyChecked) && wdm.lt(get(x_forwards(i)), searchKey)) {
+            x          = x_forwards(i)
+            x_forwards = getForwardPointers(x)
+          }
+          alreadyChecked = x_forwards(i)
+          update(i)      = x_forwards
+          i -= 1
 
-        // unless list is empty
-        var keyNode: R = null
-        if (i > 0) {
-          var alreadyChecked: R = null
-          do {
-            i -= 1
-
-            keyNode = node(i)
-            while (keyNode != null && alreadyChecked != keyNode && wdm.lt(get(keyNode), searchKey)) {
-              node    = getForwardPointers(keyNode)
-              keyNode = node(i)
-            }
-            alreadyChecked = keyNode
-            update(i) = node
-          } while (i > 0)
-
-          node = getForwardPointers(keyNode)
-        }
+        } while (i >= 0)
 
         // we insert duplicates, so no update of existing node happens here
         // perhaps should get smarter about handling duplicates, though and keep them in a separate list
         // in order to be able to skip ahead to the next record with a larger field value
 
+        {
+          // Adjust pred pointers
+          setPredPointer(record, x)
+          val x0 = x_forwards(0)
+          if (x0 ne null) setPredPointer(x0, record)
+        }
+
         val newLevel = randomLevel()
-        if (newLevel > headLevel) {
-          var j = newLevel
-          do {
+        if (newLevel > listLevel) {
+          var j = newLevel - 1
+          while (j > listLevel) {
+            update(j) = listHeader
             j -= 1
-            update(j) = head
-          } while (j > 0)
+          }
           state.levels(index) = newLevel
         }
 
-        val recordForwardPointers = ensureForwardPointerCapacity(record, newLevel)
+        x          = record
+        x_forwards = ensureForwardPointerCapacity(record, newLevel)
 
-        val ptr = update(0)(0)
+        // var ptr: R = update(0)(0)
+        // if (ptr ne null) {
+        //   setPredPointer(x, ptr)
+          // setPredPointer(ptr, x)
+        // }
+
         for (val i <- 0.until(newLevel)) {
-          recordForwardPointers(i) = update(i)(i)
-          update(i)(i) = record
+          x_forwards(i) = update(i)(i)
+          update(i)(i)  = x
         }
-        if (ptr ne null) {
-          val pred = getPredPointer(ptr)
-          setPredPointer(record, pred)
-          setPredPointer(ptr, record)
-        } else setPredPointer(record, null)
+
         record.inserted(index) = true
       }
 
@@ -325,8 +329,7 @@ object EncoreSchemaFactory extends SchemaFactory {
         }
         else
           if (pointers.length < minLevels) {
-            val newSize = math.min(minLevels, MAX_LEVEL)
-            val newPointers = Array.ofDim[R](newSize)
+            val newPointers = Array.ofDim[R](math.min(minLevels, MAX_LEVEL))
             Array.copy(pointers, 0, newPointers, 0, pointers.length)
             setForwardPointers(record, newPointers)
             newPointers
@@ -377,7 +380,7 @@ object EncoreSchemaFactory extends SchemaFactory {
 
     // Construct schema after all fields have been added
     //
-    def result: Schema[R] = {
+    def result: PrimSchema = {
       state.heads = Array.ofDim[PrimRecord](state.fieldCount, MAX_LEVEL)
       state.levels = Array.ofDim[Int](state.fieldCount)
 
