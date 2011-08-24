@@ -78,6 +78,9 @@ object EncoreSchemaFactory extends SchemaFactory {
 
     // used to avoid data structure corruption by invalid use (at the expense of increased record size)
     private[EncoreSchemaFactory] var inserted = new BitSet( state.fieldCount )
+
+    // Unique-per-schema number for this record
+    private[EncoreSchemaFactory] var number: Int = -1
   }
 
   // PrimBuilder ties it all together; as fields get added their index and typeIndex fields are set
@@ -424,6 +427,7 @@ object EncoreSchemaFactory extends SchemaFactory {
       for (field <- fields)
         field.insert(record)
       numInserted += 1
+      record.number = numInserted
     }
 
     // Retrieve nearest neighbors of record using the given weighting
@@ -433,11 +437,11 @@ object EncoreSchemaFactory extends SchemaFactory {
 
       val maxDists = Array.ofDim[Float](fields.length)
 
-      val ordering = Ordering.Float.reverse.on { (outer: (Float, R)) => outer._1}
-      val cands    = new PriorityQueue[(Float, R)]()(ordering)
-      val set      = new HashSet[R]()
-      var cut      = Float.NegativeInfinity
-      var iters    = fields.zipWithIndex.map { case (field, i) =>
+      val ordering    = Ordering.Float.reverse.on { (outer: (Float, R)) => outer._1}
+      val cands       = new PriorityQueue[(Float, R)]()(ordering)
+      val set: BitSet = new BitSet(size())
+      var cut         = Float.NegativeInfinity
+      var iters       = fields.zipWithIndex.map { case (field, i) =>
         (field, field.iterator(weights(i), field.approx(query)))
       }.filter( _._2.hasNext )
       var addCount = 0
@@ -447,7 +451,7 @@ object EncoreSchemaFactory extends SchemaFactory {
         for (entry <- iters) {
 
           // Used to deliver results to the user that are <= cut in distance
-          // Retvalue of true indicates the user does not want further results
+          // Return value of true indicates the user does not want further results
           //
           def deliver(): Boolean = {
             while (cands.nonEmpty) {
@@ -472,7 +476,7 @@ object EncoreSchemaFactory extends SchemaFactory {
           do {
             val elem = iter.next()
                 rec  = elem._2
-                adds = !set.contains(rec)
+                adds = !set(rec.number)
 
             if (adds) {
               val dimDist = elem._1
@@ -490,8 +494,8 @@ object EncoreSchemaFactory extends SchemaFactory {
                 if (deliver())
                   return
               }
-              val recDist = distanceSquare(weights, query, rec)
-              set        += rec
+              val recDist     = distanceSquare(weights, query, rec)
+              set(rec.number) = true
 
               // Instant delivery if <= cut value
               val newCand = ((recDist, rec))

@@ -5,7 +5,6 @@ import scala.collection.mutable.Builder
 package object hoodie {
 
   // Vector of weights
-  // TODO: Length checking in implementation
   type Weighting = IndexedSeq[Float]
 
   // "Weighted distance measure for values of type T"
