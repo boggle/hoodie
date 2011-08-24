@@ -135,30 +135,27 @@ object EncoreSchemaFactory extends SchemaFactory {
 
           private def findNext() {
             val left  = getPredPointer(record)
-
-            if (left eq null) {
-              record = null
-              return
-            }
-
-            val left_distance = distance(w, query, left)
             val right = getForwardPointer(record, 0)
 
-            if (right eq null) {
-              record = left
-              dist   = left_distance
-              return
-            }
+            val left_distance = if (left eq null) 0.0f else distance(w, query, left)
+            val right_distance = if (right eq null) 0.0f else distance(w, query, right)
 
-            val right_distance = distance(w, query, right)
-
-            if (left_distance < right_distance) {
-              record = left
-              dist   = left_distance
-            } else {
+            if (left eq null) {
               record = right
               dist   = right_distance
-            }
+            } else
+              if (right eq null) {
+                record = left
+                dist   = left_distance
+
+            } else
+              if (left_distance < right_distance) {
+                record = left
+                dist   = left_distance
+              } else {
+                record = right
+                dist   = right_distance
+              }
           }
         }
 

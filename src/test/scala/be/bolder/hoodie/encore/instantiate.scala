@@ -1,6 +1,8 @@
 package be.bolder.hoodie.encore
 
 import java.lang.Runtime
+import com.sun.xml.internal.ws.developer.MemberSubmissionAddressing.Validation
+import sun.awt.SunHints.Value
 
 object EncoreInstantiates {
   def main(args: Array[String]) {
@@ -75,6 +77,18 @@ object EncoreIndexes {
         System.out.println(schema.getAsString(field_t.search(3)))
         System.out.println(schema.getAsString(field_v.search(8)))
 
+
+        var score = 0.0f
+        var count = 0
+        for (value <- field_z.iterator(1.0f, field_z.search(5))) {
+          val newScore = value._1
+          if (newScore > score) {
+            score = newScore
+            System.out.println(newScore)
+          }
+          count += 1
+        }
+        System.out.println(count)
       }
   }
 }
