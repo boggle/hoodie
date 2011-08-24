@@ -267,12 +267,17 @@ object EncoreSchemaFactory extends SchemaFactory {
         }
 
         val recordForwardPointers = ensureForwardPointerCapacity(record, newLevel)
+
+        val ptr = update(0)(0)
         for (val i <- 0.until(newLevel)) {
           recordForwardPointers(i) = update(i)(i)
           update(i)(i) = record
         }
-        if (keyNode ne null)
-          setPredPointer(keyNode, record)
+        if (ptr ne null) {
+          val pred = getPredPointer(ptr)
+          setPredPointer(record, pred)
+          setPredPointer(ptr, record)
+        } else setPredPointer(record, null)
         record.inserted(index) = true
       }
 

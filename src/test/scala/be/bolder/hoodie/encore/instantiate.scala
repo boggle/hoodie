@@ -110,15 +110,15 @@ object EncoreIndexes2 {
 
         var count = 0
 
-        val fst = field_z.head.get
+        val fst = field_x.head.get
         var lst = fst
         System.out.println("fst: " + fst)
 
 
         System.out.println("1 >>>>")
-        for (value <- field_z.succIterator(1.0f, fst)) {
+        for (value <- field_x.succIterator(1.0f, fst)) {
           lst = value._2
-          System.out.println(value + " = " + field_z.get(value._2))
+          System.out.println(value + " = " + field_x.get(value._2))
           count += 1
         }
         System.out.println(numRecs)
@@ -128,8 +128,8 @@ object EncoreIndexes2 {
         System.out.println("lst: " + lst)
         System.out.println("2 >>>>")
         count = 0
-        for (value <- field_z.predIterator(1.0f, lst)) {
-          System.out.println(value + " = " + field_z.get(value._2))
+        for (value <- field_x.predIterator(1.0f, lst)) {
+          System.out.println(value + " = " + field_x.get(value._2))
           count += 1
         }
         System.out.println(numRecs)
@@ -137,8 +137,8 @@ object EncoreIndexes2 {
 
         System.out.println("3 >>>>")
         count = 0
-        for (value <- field_z.iterator(1.0f, field_z.search(1))) {
-          System.out.println(value + " = " + field_z.get(value._2))
+        for (value <- field_x.iterator(1.0f, field_x.search(1))) {
+          System.out.println(value + " = " + field_x.get(value._2))
           count += 1
         }
         System.out.println(numRecs)
