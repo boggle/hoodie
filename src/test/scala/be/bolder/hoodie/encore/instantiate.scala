@@ -2,6 +2,7 @@ package be.bolder.hoodie.encore
 
 import java.lang.Runtime
 import be.bolder.hoodie.encore.EncoreSchemaFactory.PrimRecord
+import com.sun.tools.internal.ws.wsdl.document.Input
 
 object EncoreInstantiates {
   def main(args: Array[String]) {
@@ -94,7 +95,6 @@ object EncoreIndexes2 {
       val schema = builder.result
 
       val len = 4
-      var numRecs = 0
 
       for (x <- 0.until(len))
       for (y <- 0.until(len))
@@ -106,7 +106,6 @@ object EncoreIndexes2 {
           field_z.set(record, z)
           System.out.println(schema.getAsString(record))
           schema.insert(record)
-          numRecs += 1
       }
 
       val last = new collection.mutable.HashMap[String, (Float, PrimRecord)]
@@ -154,6 +153,47 @@ object EncoreIndexes2 {
           prev = value
           count += 1
         }
+      }
+    }
+  }
+}
+
+object EncoreSearches {
+  def main(args: Array[String]) {
+    val schemaFactory = EncoreSchemaFactory
+
+    {
+      import be.bolder.hoodie.PlainIXS._
+      import be.bolder.hoodie.PlainWDM._
+
+      val builder = schemaFactory.newBuilder
+      val field_x = builder.addField[Int]("x")
+      val field_y = builder.addField[Int]("y")
+      val field_z = builder.addField[Int]("z")
+      val schema = builder.result
+
+      val len = 9
+
+      var center: EncoreSchemaFactory.R = null
+
+      for (x <- 0.until(len))
+      for (y <- 0.until(len))
+      for (z <- 0.until(len))
+      {
+          val record = schema.mkRecord
+          field_x.set(record, x)
+          field_y.set(record, y)
+          field_z.set(record, z)
+          if (x == 4 && y == 4 && z == 4)
+            center = record
+          schema.insert(record)
+      }
+
+      schema.search(Array.fill(schema.fields.length)(1.0f), center){ input => input match {
+          case Some(value) => System.out.println(value + " = " + schema.getAsString(value._2))
+          case None => System.out.println("Done.")
+        }
+        true
       }
     }
   }

@@ -2,10 +2,11 @@ package be.bolder.hoodie.encore
 
 import be.bolder.hoodie._
 import scala.reflect.Manifest
-import collection.mutable.{BitSet}
 import collection.immutable.Queue
-import com.sun.org.apache.xpath.internal.operations.Neg
-import java.lang.{IllegalArgumentException, IllegalStateException}
+import util.control.Breaks._
+import math.Ordering
+import java.lang.{IllegalStateException, IllegalArgumentException}
+import collection.mutable.{HashSet, BitSet, PriorityQueue}
 
 // Nearest-neighbor search based on in-memory skip list
 //
@@ -277,7 +278,7 @@ object EncoreSchemaFactory extends SchemaFactory {
           // setPredPointer(ptr, x)
         // }
 
-        for (val i <- 0.until(newLevel)) {
+        for (i <- 0.until(newLevel)) {
           x_forwards(i) = update(i)(i)
           update(i)(i)  = x
         }
@@ -397,25 +398,81 @@ object EncoreSchemaFactory extends SchemaFactory {
   final class PrimSchema(val fields: IndexedSeq[F[_]], val state: State) extends Schema[PrimRecord] {
     override type F[T] = EncoreSchemaFactory.this.F[T]
 
-    def mkRecord: PrimRecord = new PrimRecord(state)
+    def mkRecord: R = new PrimRecord(state)
 
-    def mkFromString(lineStr: String): PrimRecord = {
+    def mkFromString(lineStr: String): R = {
       val record  = mkRecord
       setFromString(record, lineStr)
       record
     }
 
     // Insert record into index structure
-    def insert(record: PrimRecord) {
+    def insert(record: R) {
       for (field <- fields)
         field.insert(record)
     }
 
     // Retrieve nearest neighbors of record using the given weighting
-    def search(weights: Weighting, record: PrimRecord, cont: Option[(Float, PrimRecord)] => Boolean) {
+    def search(weights: Weighting, query: R)(cont: Option[(Float, R)] => Boolean) {
+      if (weights.length != fields.length)
+        throw new IllegalArgumentException("Invalid weights (wrong number of elements) provided")
 
+      val maxDists = Array.ofDim[Float](fields.length)
+
+      val ordering = Ordering.Float.reverse.on { (outer: (Float, R)) => outer._1}
+      val cands    = new PriorityQueue[(Float, R)]()(ordering)
+      val set      = new HashSet[R]()
+      var iters    = fields.zipWithIndex.map { case (field, i) => (field, field.iterator(weights(i), query)) }
+          iters    = iters.filter( _._2.hasNext )
+
+      while(iters.nonEmpty) {
+        // Compute all next values, update maxDists, and add to cands
+        for (entry <- iters) {
+          val field   = entry._1
+          val i       = field.index
+          val elem    = entry._2.next()
+          val dimDist = elem._1
+          // if (dimDist < maxDists(i))
+          //   throw new IllegalStateException("Monotonicity violation")
+          maxDists(i) = math.max(maxDists(i), dimDist * dimDist)
+          val rec     = elem._2
+          val recDist = distanceSquare(weights, query, rec)
+          if (! set.contains(rec)) {
+            set   += rec
+            cands += ((recDist, rec))
+          }
+        }
+
+        // Compute cut value using euclidian distance
+        // (We don't need to add weighting here as this happens in the iterators)
+        val cut = maxDists.reduceLeft( _+_ )
+
+        breakable { while (cands.nonEmpty) {
+          val elem = cands.dequeue()
+          if (elem._1 < cut) {
+            set -= elem._2
+            cont(Some( (math.sqrt(elem._1.toDouble).toFloat, elem._2) ))
+          } else {
+            set   += elem._2
+            cands += elem
+            break
+          }
+        } }
+
+        // Drop empty iterators for next round
+        iters = iters.filter( _._2.hasNext )
+      }
+
+      // Deliver remaining results
+      while (cands.nonEmpty) {
+        val elem = cands.dequeue()
+        if (!cont(Some( (math.sqrt(elem._1.toDouble).toFloat, elem._2) )))
+          return
+      }
+
+      // Signal end of result stream to greedy consumer
+      cont(None)
     }
   }
-
 }
 

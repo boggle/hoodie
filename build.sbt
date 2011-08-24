@@ -2,7 +2,7 @@ name := "Hoodie"
 
 version := "0.0"
 
-scalaVersion := "2.8.1"
+scalaVersion := "2.9.1.RC3"
 
 organization := "be.bolder"
 
@@ -10,7 +10,7 @@ resolvers += ScalaToolsSnapshots
 
 // resolvers += "Tinkerpop" at "http://tinkerpop.com/maven2"
 
-libraryDependencies += "org.scala-tools.testing" %% "scalacheck" % "1.8" % "test"
+// libraryDependencies += "org.scala-tools.testing" %% "scalacheck" % "2.8" % "test"
 
 // libraryDependencies += "com.tinkerpop.blueprints" %% "blueprints-core" % "0.9" // from "http://tinkerpop.com/maven2/com/tinkerpop/blueprints/blueprints-core/0.9/blueprints-core-0.9.jar"
 

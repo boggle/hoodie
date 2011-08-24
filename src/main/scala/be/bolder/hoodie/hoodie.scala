@@ -105,7 +105,12 @@ abstract class Schema[R] {
 
   val fields: IndexedSeq[F[_]]
 
-  def distance(weights: Weighting, a:R, b: R): Float = {
+  def distance(weights: Weighting, a:R, b: R): Float =
+    // yuck... but still better to use float based squaring with large number of fields
+    math.sqrt(distance(weights, a, b).toDouble).toFloat
+
+
+  def distanceSquare(weights: Weighting, a:R, b: R): Float = {
     var dist = 0.0f
     for (i <- 0 until fields.length) {
       val field  = fields(i)
@@ -113,8 +118,7 @@ abstract class Schema[R] {
       val fieldDist = field.distance(weight, a, b)
       dist += (fieldDist * fieldDist)
     }
-    // yuck... but still better to use float based squaring with large number of fields
-    math.sqrt(dist.toDouble).toFloat
+    dist
   }
 
   def getAsString(record: R): String = fields.map( _.getAsString(record) ).mkString(separator)
@@ -137,7 +141,7 @@ abstract class Schema[R] {
 
 
   // Retrieve nearest neighbors of record using the given weighting
-  def search(weights: Weighting, record: R, cont: Option[(Float, R)] => Boolean)
+  def search(weights: Weighting, query: R)(cont: Option[(Float, R)] => Boolean)
 }
 
 
