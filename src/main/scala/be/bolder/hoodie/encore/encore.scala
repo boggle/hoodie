@@ -447,13 +447,14 @@ object EncoreSchemaFactory extends SchemaFactory {
       var addCount = 0
 
       while(iters.nonEmpty) {
-        // Compute all next values, update maxDists, and add to cands
+        // Compute all next values, update maxDists, cut, and add to cands
         for (entry <- iters) {
 
           // Used to deliver results to the user that are <= cut in distance
           // Return value of true indicates the user does not want further results
           //
           def deliver(): Boolean = {
+            addCount = 0
             while (cands.nonEmpty) {
               val elem = cands.head
               if (elem._1 <= cut) {
@@ -483,21 +484,22 @@ object EncoreSchemaFactory extends SchemaFactory {
               val dimSq = dimDist * dimDist
               val maxSq = maxDists(i)
 
-              if (dimSq < maxSq)
-                 throw new IllegalStateException("Monotonicity violation")
+              // if (dimSq < maxSq)
+              //   throw new IllegalStateException("Monotonicity violation")
 
               if (dimSq > maxSq) {
                 // Update cut value on the fly
                 cut        += (maxSq - dimSq)
                 maxDists(i) = dimSq
 
+                // Try to deliver since cut has increased
                 if (deliver())
                   return
               }
               val recDist     = distanceSquare(weights, query, rec)
               set(rec.number) = true
 
-              // Instant delivery if <= cut value
+              // Avoid queue: Instant delivery if <= cut value
               val newCand = ((recDist, rec))
               if (recDist <= cut) {
                 if (!cont(Some(newCand)))
@@ -508,8 +510,10 @@ object EncoreSchemaFactory extends SchemaFactory {
               addCount += 1
             }
           } while (!adds && iter.hasNext)
-        }
 
+          if (addCount > sizeHint && deliver())
+            return
+        }
 
         // Drop empty iterators for next round
         iters = iters.filter( _._2.hasNext )
