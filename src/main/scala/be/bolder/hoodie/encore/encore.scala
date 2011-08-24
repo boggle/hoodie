@@ -10,7 +10,7 @@ import collection.mutable.{HashSet, BitSet, PriorityQueue}
 import sun.jvm.hotspot.debugger.windbg.AddressDataSource
 import sun.jvm.hotspot.debugger.posix.elf.ELFSectionHeader
 
-// Nearest-neighbor search based on in-memory skip list
+// Nearest-neighbor search based on in-memory skip lists
 //
 // See README.md for details
 //
@@ -225,12 +225,18 @@ object EncoreSchemaFactory extends SchemaFactory {
       // If record has been inserted in this field's skip-list index, return it
       // Otherwise, searches for an arbitrary record with the same field value (i.e. calls search(get(record)))
       //
-      def approx(record: R): R = if (record.inserted(index)) record else search(get(record))
+      def approx(record: R): R = if (record.inserted(index)) record else searchApprox(get(record))
 
       def head: Option[R] = if (state.levels(index) > 0) Some(state.heads(index)(0)) else None
 
       // Search for first record that has searchKey as value of this field in internal skip-list index and return it
-      def search(searchKey: T): R = {
+      def search(searchKey: T): R = search_(searchKey, false)
+
+      // Search for first record that is >= searchKey w.r.t. the value of this field in internal skip-list index
+      // and return it
+      def searchApprox(searchKey: T): R = search_(searchKey, true)
+
+      private def search_(searchKey: T, approx: Boolean): R = {
         val listHeader: Array[R] = state.heads(index)
         val listLevel            = state.levels(index)
 
@@ -240,7 +246,6 @@ object EncoreSchemaFactory extends SchemaFactory {
         var alreadyChecked: R    = null
 
         do {
-          // && keyNode != alreadyChecked
           while ((x_forwards(i) ne null) && (x_forwards(i) ne alreadyChecked) && wdm.lt(get(x_forwards(i)), searchKey))
           {
             x          = x_forwards(i)
@@ -253,7 +258,7 @@ object EncoreSchemaFactory extends SchemaFactory {
 
         x = x_forwards(0)
 
-        if ((x ne null) && wdm.eq(get(x), searchKey)) x else null
+        if ((x ne null) && (approx || wdm.eq(get(x), searchKey))) x else null
       }
 
       // Insert record into internal skip-list index for field using the record's value of field
@@ -458,7 +463,7 @@ object EncoreSchemaFactory extends SchemaFactory {
         throw new IllegalArgumentException("Invalid weights (wrong number of elements) provided")
 
       // Maximum dimension distance seen from the iterator for field
-      val maxDists = Array.ofDim[Float](fields.length)
+      val maxDists     = Array.ofDim[Float](fields.length)
 
       // Candidate records are sorted from lowest to highest weighted total distance
       val candOrdering = Ordering.Float.reverse.on { (outer: (Float, R)) => outer._1}
@@ -504,48 +509,43 @@ object EncoreSchemaFactory extends SchemaFactory {
       }
 
       while(iters.nonEmpty) {
-        // Compute all next values, update maxDists, cut, and add to cands
-        val entry   = iters.dequeue()
+        // Dequeue iterator with highest dimension distance to the next element
+        val entry = iters.dequeue()
+        val field = entry._1
+        val index = field.index
+        val iter  = entry._2
+        val elem  = iter.next()
+        val rec   = elem._2
 
-        val field   = entry._1
-        val i       = field.index
-        val iter    = entry._2
+        // Update maxDims and cut value on the fly
+        val dimDist = elem._1
+        val dimSq   = dimDist * dimDist
+        val maxSq   = maxDists(index)
 
-        var adds    = false
-        var rec: R  = null
-        do {
-          val elem = iter.next()
-              rec  = elem._2
-              adds = !set(rec.number)
+        if (dimSq > maxSq) {
+          maxDists(index) = dimSq
+          cut            += (dimSq - maxSq)
 
-          if (adds) {
-            val dimDist = elem._1
-            val dimSq = dimDist * dimDist
-            val maxSq = maxDists(i)
+          // Try to deliver since cut has increased
+          if (deliver())
+            return
+        }
 
-            if (dimSq > maxSq) {
-              // Update cut value on the fly
-              cut        += (dimSq - maxSq)
-              maxDists(i) = dimSq
+        // Only if we haven't seen this record before from another iterator
+        if (!set(rec.number)) {
+          val recDist     = distanceSquare(weights, query, rec)
+          set(rec.number) = true
 
-              // Try to deliver since cut has increased
-              if (deliver())
-                return
-            }
-            val recDist     = distanceSquare(weights, query, rec)
-            set(rec.number) = true
-
-            // Avoid cand queue: Instant delivery if <= cut value
-            val newCand = ((recDist, rec))
-            if (recDist <= cut) {
-              if (!cont(Some(newCand)))
-                return
-            }
-            // Add to queue otherwise
-            cands    += newCand
-            addCount += 1
+          // Avoid cand queue: Instant delivery if <= cut value
+          val newCand = ((recDist, rec))
+          if (recDist <= cut) {
+            if (!cont(Some(newCand)))
+              return
           }
-        } while (!adds && iter.hasNext)
+          // Add to queue otherwise
+          cands    += newCand
+          addCount += 1
+        }
 
         if (iter.hasNext)
           iters.enqueue((field, iter))

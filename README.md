@@ -33,6 +33,14 @@ measure comparator) and modify the implementations.  In encore, edit "PrimRecord
 relevant places in the code.
 
 
+Status
+------
+
+Works but is way too slow; Im unsure at this point if the chosen algorithm can be made much faster.
+
+To try it out, see the code in src/test/scala/instantiates.scala
+
+
 Encore Implementation
 ---------------------
 
@@ -127,7 +135,7 @@ TODO
 
 - [X] Verify dimSize
 - [X] Make it work (search still has a bug the order is only "mostly correct")
-- [?] Search from non-inserted point (untested, cf. "approx")
+- [-] Search from non-inserted point (broken, searchApprox needs fix, for now, insert to search)
 - [ ] Little http server for accessing
 - [ ] Delete
 - [ ] Batching of updates

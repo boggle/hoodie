@@ -280,5 +280,77 @@ object EncoreSearches2 {
       }
     }
   }
-
 }
+
+object EncoreSearches3 {
+  def main(args: Array[String]) {
+    val schemaFactory = EncoreSchemaFactory
+
+    {
+      import be.bolder.hoodie.PlainIXS._
+      import be.bolder.hoodie.PlainWDM._
+
+      val runtime = Runtime.getRuntime
+      val mem1 = runtime.totalMemory() - runtime.freeMemory()
+      val builder = schemaFactory.newBuilder
+      val field_x = builder.addField[Float]("x")
+      val field_y = builder.addField[Float]("y")
+      val field_z = builder.addField[Float]("z")
+      // val field_i = builder.addField[Float]("i")
+      val field_s = builder.addField[Float]("s")
+      val field_v = builder.addField[Float]("v")
+      val field_t = builder.addField[Float]("t")
+      val schema = builder.result
+
+      val len = 9
+
+      var center: EncoreSchemaFactory.R = null
+
+      for (x <- 0.until(len))
+      for (y <- 0.until(len))
+      for (z <- 0.until(len))
+      for (v <- 0.until(len))
+      for (t <- 0.until(len))
+      // for (i <- 0.until(len))
+      for (s <- 0.until(4))
+      {
+          val record = schema.mkRecord
+          field_x.set(record, math.random.toFloat)
+          field_y.set(record, math.random.toFloat)
+          field_z.set(record, math.random.toFloat)
+          field_v.set(record, math.random.toFloat)
+          field_t.set(record, math.random.toFloat)
+          // field_i.set(record, math.random.toFloat)
+          field_s.set(record, math.random.toFloat)
+          schema.insert(record)
+      }
+
+      {
+        val times = 10
+        val center = schema.mkRecord
+        field_x.set(center, 4.0f)
+        field_y.set(center, 4.0f)
+        field_z.set(center, 4.0f)
+        field_v.set(center, 4.0f)
+        field_t.set(center, 4.0f)
+        // field_i.set(center, 4.0f)
+        field_s.set(center, 1.5f)
+        schema.insert(center)
+        val weights = Array(1.0f, 1.0f, 1.0f, 1.0f, 1.0f, 1.0f) // , 1.0f)
+        System.out.println("Created")
+        val mem2 = runtime.totalMemory() - runtime.freeMemory()
+        System.out.println ( (mem2 - mem1) / 1024 )
+
+        val start = Platform.currentTime
+        for (i <- 0.until(times)) {
+          schema.searchK[Set[(Float, EncoreSchemaFactory.R)]](weights, center, 20)
+        }
+        val end = Platform.currentTime
+        System.out.println ( (end - start) / times )
+        val mem3 = runtime.totalMemory() - runtime.freeMemory()
+        System.out.println ( (mem3 - mem2) / 1024 )
+      }
+    }
+  }
+}
+
