@@ -83,6 +83,7 @@ object EncoreSchemaFactory extends SchemaFactory {
 
   trait PeekingIterator extends Iterator[(Float, R)] {
     def peek: Option[Float]
+    def index: Int
   }
 
   // PrimBuilder ties it all together; as fields get added their index and typeIndex fields are set
@@ -217,6 +218,8 @@ object EncoreSchemaFactory extends SchemaFactory {
               result
             } else fetchNext()
           }
+
+          val index = PrimField.this.index
         }
 
       // If record has been inserted in this field's skip-list index, return it
@@ -274,7 +277,8 @@ object EncoreSchemaFactory extends SchemaFactory {
         var i                    = listLevel
         var alreadyChecked: R    = null
         do {
-          while ((x_forwards(i) ne null) && (x_forwards(i) ne alreadyChecked) && wdm.lt(get(x_forwards(i)), searchKey)) {
+          while ((x_forwards(i) ne null) && (x_forwards(i) ne alreadyChecked) && wdm.lt(get(x_forwards(i)), searchKey))
+          {
             x          = x_forwards(i)
             x_forwards = getForwardPointers(x)
           }
@@ -480,6 +484,12 @@ object EncoreSchemaFactory extends SchemaFactory {
       // Candidate values closer to the query than this can be delivered
       var cut          = 0.0f
 
+
+      var itersArray   = fields.zipWithIndex.map {
+                           case (field, i) =>
+                             field.iterator(weights(i), field.approx(query))
+                         }.filter( _.hasNext ).toArray
+
       // Iterators are sorted from lowest to highest weighted dimension distance,
       // this minimizes the number of points added
       //
@@ -490,17 +500,14 @@ object EncoreSchemaFactory extends SchemaFactory {
       // Reversing this ordering brings up the cut as fast as possible and might be better in very low dim situations
       //
       val iterOrdering = Ordering.Float.reverse.on {
-        (iter: (Int, PeekingIterator)) =>
-          val score = iter._2.peek
+        (iter: Int) =>
+          val score = itersArray(iter).peek
           if (score.isDefined) score.get else Float.NegativeInfinity
       }
-      val iters        = new PriorityQueue[(Int, PeekingIterator)]()(iterOrdering)
+      val iters        = new PriorityQueue[Int]()(iterOrdering)
 
+      iters          ++= 0.until(itersArray.length)
 
-      for (iter <- fields.zipWithIndex.map {
-        case (field, i) => (field.index, field.iterator(weights(i), field.approx(query)))
-      }.filter( _._2.hasNext ))
-        iters.enqueue(iter)
 
       var resultCount = 0                      // Number of results delivered
       var resultBound = Float.NegativeInfinity // Bound of "worst" result found
@@ -553,8 +560,8 @@ object EncoreSchemaFactory extends SchemaFactory {
         while(iters.nonEmpty) {
           // Dequeue iterator with highest dimension distance to the next element
           val entry = iters.dequeue()
-          val index = entry._1
-          val iter  = entry._2
+          val iter  = itersArray(entry)
+          val index = iter.index
           val elem  = iter.next()
           val rec   = elem._2
 
@@ -599,7 +606,7 @@ object EncoreSchemaFactory extends SchemaFactory {
           if (iter.hasNext) {
             val peek = iter.peek.get // factored out for debugging
             if (peek <= bound)
-              iters.enqueue((index, iter))
+              iters.enqueue(entry)
           }
         }
 
