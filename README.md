@@ -36,28 +36,33 @@ relevant places in the code.
 Status
 ------
 
-Works but is still too slow
+Rough alpha
 
-For 2125764 records (7 float dimensions, using random values), I get 1.8 secs on average to find top-3 elements on
-a 2.3 GHz laptop
+This really needs more correctness checking! ("Looks ok to me"-quality right now)
 
-For EncoreSearch5 (20 dims, 100000 recs each) I get:
+For 2.125.764 records (EncoreSearch4, 7 float dimensions, using random values), I get 1.6 s on average to find
+top-3 elements on a 2.3 GHz laptop
 
-Memory (bytes) used until creation: 87316624 per record: 873 and dimension: 43
-Time per search (ms): 465
-Memory (bytes) used until end of search: 90287784 per record: 902 and dimension: 45
+Using EncoreSearch5 with 50 dims, 1.000.000 recs, I get:
+
+Memory (bytes) used until creation: 1963248920 per record: 1963 and dimension: 39
+Time per search (ms): 18286
+Memory (bytes) used until end of search: 2040937368 per record: 2040 and dimension: 40
 
 To try it out, see the code in src/test/scala/instantiates.scala
 
 
-Plans
------
+Plans for BTS branch
+--------------------
 
-So, this thing uses way too much memory and doesn't give that fast query time for it
+So, this thing uses way too much memory and doesn't give fast query times for it
 
 Best way to proceed is to replace the skip lists with binary search based arrays, that should cut
-memory consumption drastically. Needed along: Rewrite of iterators, ideally they are more array like
-and the iters pq only stores Ints.
+memory consumption drastically and increase lookup times
+
+Generally, I want to go more towards big, read-only array and recompute indices in batches
+
+Also need to think about best way to utilize multiple cores, currently all is single threaded
 
 
 Encore Implementation
@@ -159,6 +164,7 @@ TODO
 - [ ] Delete
 - [ ] Batching of updates
 - [X]ÊGetter for number of elements
+- [X] Rewrite of iterators, ideally they are more array like and the iters pq only stores Ints.
 
 
 

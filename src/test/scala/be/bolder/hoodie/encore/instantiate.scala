@@ -440,13 +440,13 @@ object EncoreSearches5 {
       val runtime = Runtime.getRuntime
 
 
-      val times   = 10
-      val numDims = 20
-      val numRecs = 100000
+      val times   = 20
+      val numDims = 50
+      val numRecs = 1000000
 
       val mem1    = runtime.totalMemory() - runtime.freeMemory()
       val builder = schemaFactory.newBuilder
-      val fields  = Array.fill(20)( builder.addField[Float](java.util.UUID.randomUUID().toString) )
+      val fields  = Array.fill(numDims)( builder.addField[Float](java.util.UUID.randomUUID().toString) )
       val schema  = builder.result
 
       for (i <- 0.until(numRecs)) {

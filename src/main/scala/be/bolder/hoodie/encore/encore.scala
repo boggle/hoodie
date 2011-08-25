@@ -6,6 +6,7 @@ import collection.immutable.Queue
 import math.Ordering
 import java.lang.{IllegalStateException, IllegalArgumentException}
 import collection.mutable.{BitSet, PriorityQueue}
+import javax.accessibility.AccessibleState
 
 // Nearest-neighbor search based on in-memory skip lists
 //
@@ -93,41 +94,12 @@ object EncoreSchemaFactory extends SchemaFactory {
     private var fields = Queue.newBuilder[F[_]]
 
     // PrimFields keep track of index and type index to store values into corresponding PrimRecord array slots
-    // TODO: Pull one level up
-    final class PrimField[T](aName: String, state: State)(implicit anIxs: IXS[T], aWdm: WDM[T], aMf: Manifest[T])
+    sealed abstract class PrimField[T](aName: String, state: State)(implicit anIxs: IXS[T], aWdm: WDM[T], aMf: Manifest[T])
       extends Field[R, T](aName, anIxs, aWdm, aMf) {
 
       override type F[T] = PrimField[T]
 
       val index = state.fieldCount
-
-      val typeIndex = mf match {
-        case Manifest.Int => state.intFieldCount
-        case Manifest.Boolean => state.boolFieldCount
-        case Manifest.Float => state.floatFieldCount
-        case _ => throw new IllegalArgumentException("Unsupported field type")
-      }
-
-      // Get value of field in record
-      def get(record: R): T =
-        mf match {
-          case Manifest.Int => record.intMap(typeIndex).asInstanceOf[T]
-          case Manifest.Boolean => record.boolMap(typeIndex).asInstanceOf[T]
-          case Manifest.Float => record.floatMap(typeIndex).asInstanceOf[T]
-        }
-
-      // Set value of field in record
-      def set(record: R, value: T) {
-        if (record.inserted(index))
-          throw new IllegalArgumentException("Attempt to modify already inserted record")
-        else {
-          mf match {
-            case Manifest.Int => record.intMap(typeIndex) = value.asInstanceOf[Int]
-            case Manifest.Boolean => record.boolMap(typeIndex) = value.asInstanceOf[Boolean]
-            case Manifest.Float => record.floatMap(typeIndex) = value.asInstanceOf[Float]
-          }
-        }
-      }
 
       // Iteration helper for PrimRecords
       protected[EncoreSchemaFactory] sealed abstract class RecIterator(w: Float, query: R)
@@ -396,6 +368,59 @@ object EncoreSchemaFactory extends SchemaFactory {
       }
     }
 
+    final class FloatField(aName: String, aState: State, anIxs: IXS[Float], aWdm: WDM[Float])
+      extends PrimField[Float](aName, aState)(anIxs, aWdm, Manifest.Float) {
+      
+      val typeIndex = state.floatFieldCount
+
+      // Get value of field in record
+      def get(record: R): Float = record.floatMap(typeIndex)
+
+      // Set value of field in record
+      def set(record: R, value: Float) {
+        if (record.inserted(index))
+          throw new IllegalArgumentException("Attempt to modify already inserted record")
+        else
+          record.floatMap(typeIndex) = value
+      }
+
+    }
+    
+    final class BoolField(aName: String, aState: State, anIxs: IXS[Boolean], aWdm: WDM[Boolean])
+      extends PrimField[Boolean](aName, aState)(anIxs, aWdm, Manifest.Boolean) {
+
+      val typeIndex = state.boolFieldCount
+
+      // Get value of field in record
+      def get(record: R): Boolean = record.boolMap(typeIndex)
+
+      // Set value of field in record
+      def set(record: R, value: Boolean) {
+        if (record.inserted(index))
+          throw new IllegalArgumentException("Attempt to modify already inserted record")
+        else
+          record.boolMap(typeIndex) = value
+      }
+
+    }
+    
+    final class IntField(aName: String, aState: State, anIxs: IXS[Int], aWdm: WDM[Int])
+      extends PrimField[Int](aName, aState)(anIxs, aWdm, Manifest.Int) {
+
+      val typeIndex = state.intFieldCount
+
+      // Get value of field in record
+      def get(record: R): Int = record.intMap(typeIndex)
+
+      // Set value of field in record
+      def set(record: R, value: Int) {
+        if (record.inserted(index))
+          throw new IllegalArgumentException("Attempt to modify already inserted record")
+        else
+          record.intMap(typeIndex) = value
+      }
+    }
+
     // Rewind builder
     def clear() {
       state = new State
@@ -407,11 +432,14 @@ object EncoreSchemaFactory extends SchemaFactory {
       var res: F[T] = null
       mf match {
         case Manifest.Int =>
-          res = new PrimField(name, state); state.intFieldCount += 1
+          res = new IntField(name, state, ixs.asInstanceOf[IXS[Int]], wdm.asInstanceOf[WDM[Int]]).asInstanceOf[F[T]]
+          state.intFieldCount += 1
         case Manifest.Boolean =>
-          res = new PrimField(name, state); state.boolFieldCount += 1
+          res = new BoolField(name, state, ixs.asInstanceOf[IXS[Boolean]], wdm.asInstanceOf[WDM[Boolean]]).asInstanceOf[F[T]]
+          state.boolFieldCount += 1
         case Manifest.Float =>
-          res = new PrimField(name, state); state.floatFieldCount += 1
+          res = new FloatField(name, state, ixs.asInstanceOf[IXS[Float]], wdm.asInstanceOf[WDM[Float]]).asInstanceOf[F[T]]
+          state.floatFieldCount += 1
         case _ => throw new IllegalArgumentException("Unsupported field type")
       }
       state.fieldCount += 1
