@@ -6,6 +6,7 @@ import collection.immutable.Queue
 import math.Ordering
 import java.lang.{IllegalStateException, IllegalArgumentException}
 import collection.mutable.{BitSet, PriorityQueue}
+import sun.awt.SunHints.Value
 
 // Nearest-neighbor search based on in-memory skip lists
 //
@@ -475,7 +476,7 @@ object EncoreSchemaFactory extends SchemaFactory {
       val set: BitSet  = new BitSet(size())
 
       // Largest top-k value (Used to drop iterators)
-      val bound        = Float.PositiveInfinity
+      var bound        = Float.PositiveInfinity
 
       // Candidate values closer to the query than this can be delivered
       var cut          = 0.0f
@@ -502,13 +503,16 @@ object EncoreSchemaFactory extends SchemaFactory {
       }.filter( _._2.hasNext ))
         iters.enqueue(iter)
 
-      var resultCount = 0  // Number of results delivered
-      var foundCount  = 0  // Number of candidates added since last call to deliver()
+      var resultCount = 0                      // Number of results delivered
+      var resultBound = Float.NegativeInfinity // Bound of "worst" result found
+      var foundCount  = 0                      // Number of candidates added since last call to deliver()
 
 
       // Adds elem to results
       def add1(elem: (Float, R)) {
-        into        += elem
+        val root     = math.sqrt(elem._1.toDouble).toFloat
+        resultBound  = math.max(resultBound, elem._1)
+        into        += ((root, elem._2))
         resultCount += 1
       }
 
@@ -537,7 +541,8 @@ object EncoreSchemaFactory extends SchemaFactory {
         while (cands.nonEmpty) {
           if (deliver1(cands.head)) {
             cands.dequeue()
-            if (isDone) return true
+            if (isDone)
+              return true
           }
           else
             return false
@@ -563,7 +568,6 @@ object EncoreSchemaFactory extends SchemaFactory {
             maxDists(index) = dimSq
             cut            += (dimSq - maxSq)
 
-            // Try to deliver since cut has increased
             if (deliver())
               return
           }
@@ -578,18 +582,20 @@ object EncoreSchemaFactory extends SchemaFactory {
             if (deliver1(newCand)) {
               if (isDone)
                 return
-            } else {
+            } else if (newCand._1 <= bound) {
               // Add to queue otherwise
               cands      += newCand
               foundCount += 1
+              // Update bound
+              if (cands.size >= k)
+                bound = cands.take(k-resultCount).foldLeft[Float](resultBound)(
+                  (op: Float, value: (Float, R)) => math.max(value._1, op)
+                )
             }
           }
 
-          if (iter.hasNext && iter.peek.get < bound)
+          if (iter.hasNext && iter.peek.get <= bound)
             iters.enqueue((index, iter))
-
-          if (foundCount > (k-resultCount) && deliver())
-            return
         }
 
         // Deliver remaining results
