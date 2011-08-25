@@ -140,29 +140,15 @@ abstract class Schema[R] {
   def insert(record: R)
 
 
-  // Retrieve nearest neighbors of query using the given weighting
+  // Retrieve the ke nearest neighbors of query using the given weighting
   //
-  // Results are delivered to cont which by returning true may request more results.  None indicates that there are
-  // no more results available to cont
-  //
-  def search(weights: Weighting, query: R, sizeHint: Int)(cont: Option[(Float, R)] => Boolean)
-
-
-  // Retrieve k nearest neighbors of query using the given weighting
-  //
-  def searchK[That](weights: Weighting, query: R, k: Int)(implicit cbf: CanBuildFrom[_,(Float,R), That]): That = {
+  final def search[That](weights: Weighting, query: R, k: Int)(implicit cbf: CanBuildFrom[_,(Float,R), That]): That = {
     val builder = cbf()
-    var count   = k
-    search(weights, query, k){ input => input match {
-      case Some(value) =>
-        builder += value
-        count   -= 1
-        if (count > 0) true else false
-      case None =>
-        false
-    }}
+    searchInto(weights, query, k, builder)
     builder.result()
   }
+
+  protected def searchInto[That](weights: Weighting, query: R, k: Int, into: Builder[(Float, R), That])
 
   def size(): Int
 }

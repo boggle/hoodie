@@ -3,12 +3,9 @@ package be.bolder.hoodie.encore
 import be.bolder.hoodie._
 import scala.reflect.Manifest
 import collection.immutable.Queue
-import util.control.Breaks._
 import math.Ordering
 import java.lang.{IllegalStateException, IllegalArgumentException}
-import collection.mutable.{HashSet, BitSet, PriorityQueue}
-import sun.jvm.hotspot.debugger.windbg.AddressDataSource
-import sun.jvm.hotspot.debugger.posix.elf.ELFSectionHeader
+import collection.mutable.{BitSet, PriorityQueue}
 
 // Nearest-neighbor search based on in-memory skip lists
 //
@@ -458,113 +455,148 @@ object EncoreSchemaFactory extends SchemaFactory {
     }
 
     // Retrieve nearest neighbors of record using the given weighting
-    def search(weights: Weighting, query: R, sizeHint: Int)(cont: Option[(Float, R)] => Boolean) {
+    protected def searchInto[That](weights: Weighting, query: R, k: Int,
+                                   into: collection.mutable.Builder[(Float, R), That]) {
+      new Search[That](weights, query, k, into)()
+    }
+
+    final private class Search[That](weights: Weighting, query: R, k: Int,
+                                     into: collection.mutable.Builder[(Float, R), That]) {
       if (weights.length != fields.length)
         throw new IllegalArgumentException("Invalid weights (wrong number of elements) provided")
+
+      // Candidate records are sorted from lowest to highest weighted total distance
+      val candOrdering = Ordering.Float.reverse.on { (outer: (Float, R)) => outer._1}
 
       // Maximum dimension distance seen from the iterator for field
       val maxDists     = Array.ofDim[Float](fields.length)
 
-      // Candidate records are sorted from lowest to highest weighted total distance
-      val candOrdering = Ordering.Float.reverse.on { (outer: (Float, R)) => outer._1}
       val cands        = new PriorityQueue[(Float, R)]()(candOrdering)
       val set: BitSet  = new BitSet(size())
+
+      // Largest top-k value (Used to drop iterators)
+      val bound        = Float.PositiveInfinity
 
       // Candidate values closer to the query than this can be delivered
       var cut          = 0.0f
 
-      // Iterators are sorted from highest to lowest weighted dimension distance
-      // (This brings up the cut as fast as possible)
-      val iterOrdering = Ordering.Float.on {
-        (iter: (F[_], PeekingIterator)) =>
+      // Iterators are sorted from highest to lowest weighted dimension distance, this minimizes the number of points
+      // added
+      //
+      // The distance value is made available via PeekIterator.peek which implements a buffer of size 1 for this purpose
+      //
+      // The first field in iter pairs is the field index.  It is used for maintenance of the maxDims array
+      //
+      // Reversing this ordering brings up the cut as fast as possible and might be better in very low dim situations
+      //
+      val iterOrdering = Ordering.Float.reverse.on {
+        (iter: (Int, PeekingIterator)) =>
           val score = iter._2.peek
           if (score.isDefined) score.get else Float.NegativeInfinity
       }
-      val iters        = new PriorityQueue[(F[_], PeekingIterator)]()(iterOrdering)
+      val iters        = new PriorityQueue[(Int, PeekingIterator)]()(iterOrdering)
 
 
       for (iter <- fields.zipWithIndex.map {
-        case (field, i) => (field, field.iterator(weights(i), field.approx(query)))
+        case (field, i) => (field.index, field.iterator(weights(i), field.approx(query)))
       }.filter( _._2.hasNext ))
         iters.enqueue(iter)
 
-      var addCount = 0
+      var resultCount = 0  // Number of results delivered
+      var foundCount  = 0  // Number of candidates added since last call to deliver()
+
+
+      // Adds elem to results
+      def add1(elem: (Float, R)) {
+        into        += elem
+        resultCount += 1
+      }
+
+      // True, if no more values need to be delivered
+      def isDone = resultCount == k
+
+      // Delivers elem if it is <= cut
+      //
+      // Result value is true iff elem was delivered
+      //
+      def deliver1(elem: (Float, R)): Boolean = {
+        if (elem._1 <= cut) {
+          add1(elem)
+          true
+        }
+        else
+          false
+      }
 
       // Used to deliver results to the user that are <= cut in distance
-      // Return value of true indicates the user does not want further results
+      //
+      // Return value of true indicates that enough values have been found
       //
       def deliver(): Boolean = {
-        addCount = 0
+        foundCount = 0
         while (cands.nonEmpty) {
-          val elem = cands.head
-          if (elem._1 <= cut) {
+          if (deliver1(cands.head)) {
             cands.dequeue()
-            if (!cont(Some( (math.sqrt(elem._1.toDouble).toFloat, elem._2) )))
-              return true
-          } else {
-            return false
+            if (isDone) return true
           }
+          else
+            return false
         }
         false
       }
 
-      while(iters.nonEmpty) {
-        // Dequeue iterator with highest dimension distance to the next element
-        val entry = iters.dequeue()
-        val field = entry._1
-        val index = field.index
-        val iter  = entry._2
-        val elem  = iter.next()
-        val rec   = elem._2
+      def apply() {
+        while(iters.nonEmpty) {
+          // Dequeue iterator with highest dimension distance to the next element
+          val entry = iters.dequeue()
+          val index = entry._1
+          val iter  = entry._2
+          val elem  = iter.next()
+          val rec   = elem._2
 
-        // Update maxDims and cut value on the fly
-        val dimDist = elem._1
-        val dimSq   = dimDist * dimDist
-        val maxSq   = maxDists(index)
+          // Update maxDims and cut value on the fly
+          val dimDist = elem._1
+          val dimSq   = dimDist * dimDist
+          val maxSq   = maxDists(index)
 
-        if (dimSq > maxSq) {
-          maxDists(index) = dimSq
-          cut            += (dimSq - maxSq)
+          if (dimSq > maxSq) {
+            maxDists(index) = dimSq
+            cut            += (dimSq - maxSq)
 
-          // Try to deliver since cut has increased
-          if (deliver())
+            // Try to deliver since cut has increased
+            if (deliver())
+              return
+          }
+
+          // Only if we haven't seen this record before from another iterator
+          if (!set(rec.number)) {
+            val recDist     = distanceSquare(weights, query, rec)
+            set(rec.number) = true
+
+            // Avoid cand queue: Instant delivery if <= cut value
+            val newCand = ((recDist, rec))
+            if (deliver1(newCand)) {
+              if (isDone)
+                return
+            } else {
+              // Add to queue otherwise
+              cands      += newCand
+              foundCount += 1
+            }
+          }
+
+          if (iter.hasNext && iter.peek.get < bound)
+            iters.enqueue((index, iter))
+
+          if (foundCount > (k-resultCount) && deliver())
             return
         }
 
-        // Only if we haven't seen this record before from another iterator
-        if (!set(rec.number)) {
-          val recDist     = distanceSquare(weights, query, rec)
-          set(rec.number) = true
-
-          // Avoid cand queue: Instant delivery if <= cut value
-          val newCand = ((recDist, rec))
-          if (recDist <= cut) {
-            if (!cont(Some(newCand)))
-              return
-          }
-          // Add to queue otherwise
-          cands    += newCand
-          addCount += 1
-        }
-
-        if (iter.hasNext)
-          iters.enqueue((field, iter))
-
-        if (addCount > sizeHint && deliver())
-          return
+        // Deliver remaining results
+        while (cands.nonEmpty && !isDone)
+          add1(cands.dequeue())
       }
-
-      // Deliver remaining results
-      while (cands.nonEmpty) {
-        val elem = cands.dequeue()
-        if (!cont(Some( (math.sqrt(elem._1.toDouble).toFloat, elem._2) )))
-          return
-      }
-
-      // Signal end of result stream to greedy consumer
-      cont(None)
     }
   }
-
 }
 
