@@ -6,7 +6,6 @@ import collection.immutable.Queue
 import math.Ordering
 import java.lang.{IllegalStateException, IllegalArgumentException}
 import collection.mutable.{BitSet, PriorityQueue}
-import sun.awt.SunHints.Value
 
 // Nearest-neighbor search based on in-memory skip lists
 //
@@ -481,8 +480,8 @@ object EncoreSchemaFactory extends SchemaFactory {
       // Candidate values closer to the query than this can be delivered
       var cut          = 0.0f
 
-      // Iterators are sorted from highest to lowest weighted dimension distance, this minimizes the number of points
-      // added
+      // Iterators are sorted from lowest to highest weighted dimension distance,
+      // this minimizes the number of points added
       //
       // The distance value is made available via PeekIterator.peek which implements a buffer of size 1 for this purpose
       //
@@ -582,20 +581,26 @@ object EncoreSchemaFactory extends SchemaFactory {
             if (deliver1(newCand)) {
               if (isDone)
                 return
-            } else if (newCand._1 <= bound) {
-              // Add to queue otherwise
+            } else
+              // Otherwise: Only if cand is better than current result candidates
+              if (newCand._1 <= bound) {
+              // Add to queue
               cands      += newCand
               foundCount += 1
               // Update bound
-              if (cands.size >= k)
-                bound = cands.take(k-resultCount).foldLeft[Float](resultBound)(
+              val numCands = k-resultCount
+              if (cands.size >= numCands)
+                bound = cands.take(numCands).foldLeft[Float](resultBound)(
                   (op: Float, value: (Float, R)) => math.max(value._1, op)
                 )
             }
           }
 
-          if (iter.hasNext && iter.peek.get <= bound)
-            iters.enqueue((index, iter))
+          if (iter.hasNext) {
+            val peek = iter.peek.get // factored out for debugging
+            if (peek <= bound)
+              iters.enqueue((index, iter))
+          }
         }
 
         // Deliver remaining results

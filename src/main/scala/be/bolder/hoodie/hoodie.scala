@@ -31,10 +31,7 @@ package object hoodie {
 package hoodie {
 
 import reflect.Manifest
-import util.Random
-import com.sun.xml.internal.ws.developer.MemberSubmissionAddressing.Validation
-import java.net.DatagramSocketImpl
-import collection.generic.{Growable, CanBuildFrom}
+import collection.generic.{CanBuildFrom}
 
 // Stock symmetric WDMs for primitive types
 object PlainWDM {

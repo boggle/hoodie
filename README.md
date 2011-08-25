@@ -36,13 +36,32 @@ relevant places in the code.
 Status
 ------
 
-Works but is way too slow; Im unsure at this point if the chosen algorithm can be made much faster.
+Works but is still too slow
+
+For 2125764 records (7 float dimensions, using random values), I get 1.8 secs on average to find top-3 elements on
+a 2.3 GHz laptop
+
+For EncoreSearch5 (20 dims, 100000 recs each) I get:
+
+Memory (bytes) used until creation: 87316624 per record: 873 and dimension: 43
+Time per search (ms): 465
+Memory (bytes) used until end of search: 90287784 per record: 902 and dimension: 45
 
 To try it out, see the code in src/test/scala/instantiates.scala
 
 
+Plans
+-----
+
+So, this thing uses way too much memory and doesn't give that fast query time for it
+
+Best way to proceed is to replace the skip lists with binary search based arrays, that should cut
+memory consumption drastically. Needed along: Rewrite of iterators, ideally they are more array like
+and the iters pq only stores Ints.
+
+
 Encore Implementation
----------------------
+=====================
 
 This currently is the only provided implementation. Encore uses records that aggregate all field values
 by type into arrays in order to be space efficient (and avoid boxing of property maps). For each field, a
