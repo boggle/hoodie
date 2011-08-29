@@ -6,7 +6,6 @@ import collection.immutable.Queue
 import math.Ordering
 import java.lang.{IllegalStateException, IllegalArgumentException}
 import collection.mutable.{BitSet, PriorityQueue}
-import javax.accessibility.AccessibleState
 
 // Nearest-neighbor search based on in-memory skip lists
 //
@@ -622,7 +621,7 @@ object EncoreSchemaFactory extends SchemaFactory {
               // Add to queue
               cands      += newCand
               foundCount += 1
-              // Update bound
+              // Update bound (maximum distance to query point from already found results + lowest known candidates)
               val numCands = k-resultCount
               if (cands.size >= numCands)
                 bound = cands.take(numCands).foldLeft[Float](resultBound)(
