@@ -1,4 +1,4 @@
-package be.bolder.hoodie.encore.linbin
+package be.bolder.hoodie.linbin
 
 import collection.mutable.BitSet
 import scala.Array
@@ -48,15 +48,41 @@ object LinBin {
     implicit object AnyRef extends DefaultValue[Null](null)
   }
 
+  def stashSize(l: Int, m: Int) = ( ( 1 << (l+1) ) - 2 ) << m
+
+  def verifyParameters(n: Int, l: Int, m: Int) {
+    if (n < 1)
+      throw new IllegalArgumentException("n < 1")
+    if (n > 30)
+       throw new IllegalArgumentException("n > 30")
+
+    if (l < 0)
+      throw new IllegalArgumentException("l < 0")
+    if (l > 29)
+       throw new IllegalArgumentException("l > 29")
+
+    if (m < 0)
+      throw new IllegalArgumentException("m < 0")
+    if (m > 28)
+      throw new IllegalArgumentException("m > 28")
+
+    if ((l == 0) || (l + m > n))
+      throw new IllegalArgumentException("l + m > n")
+  }
+
   def fromItemSortedArray[@specialized(Short, Int, Long, Float, Double) T](n: Int, l: Int, m: Int, data: Array[T])
-                            (implicit ord: Ordering[T], defaultValue: DefaultValue[T], mf: Manifest[T]): LinBin[T, T] =
-    new ItemLinBin[T](n, m, l, defaultValue.value, data)
+                           (implicit ord: Ordering[T], defaultValue: DefaultValue[T], mf: Manifest[T]): LinBin[T, T] = {
+    verifyParameters(n, l, m)
+    new ItemLinBin[T](n, l, m, defaultValue.value, data, Array.ofDim[T](stashSize(l, m)))
+  }
 
   def fromKeySortedArray[@specialized(Short, Int, Long, Float, Double) K,
                          @specialized(Short, Int, Long, Float, Double) T]
                         (n: Int, l: Int, m: Int, data: Array[T])(extractor: (T => K))
-                        (implicit ord: Ordering[K], defaultValue: DefaultValue[T], mf: Manifest[T]): LinBin[K, T] =
-    new KeyLinBin[K, T](n, m, l, defaultValue.value, data)(extractor)
+                        (implicit ord: Ordering[K], defaultValue: DefaultValue[T], mf: Manifest[T]): LinBin[K, T] = {
+    verifyParameters(n, l, m)
+    new KeyLinBin[K, T](n, l, m, defaultValue.value, data, Array.ofDim[T](stashSize(l, m)))(extractor)
+  }
 
   /*
    * This is the implementation class of LinBins
@@ -93,24 +119,6 @@ object LinBin {
     @inline
     def extractKey(item: T): K
 
-    if (n < 1)
-      throw new IllegalArgumentException("n < 1")
-    if (n > 30)
-       throw new IllegalArgumentException("n > 30")
-
-    if (l < 0)
-      throw new IllegalArgumentException("l < 0")
-    if (l > 29)
-       throw new IllegalArgumentException("l > 29")
-
-    if (m < 0)
-      throw new IllegalArgumentException("m < 0")
-    if (m > 28)
-      throw new IllegalArgumentException("m > 28")
-
-    if ((l == 0) || (l + m > n))
-      throw new IllegalArgumentException("l + m > n")
-
 
     val maxStripSize   = 1 << n
 
@@ -124,10 +132,6 @@ object LinBin {
 
     val chunkSize      = 1 << numChunkBits
 
-    private val stash  = Array.ofDim[T]( numStashBlocks << m)(mf)
-
-    @inline
-    def stashSize = stash.length
 
     private def initStrip() {
       if (strip eq null)
@@ -142,9 +146,13 @@ object LinBin {
 
     def stripSize = strip.length
 
-    private val deletedFromStrip = BitSet(stripSize)
-    private val valueInStash     = BitSet(stashSize)
+    val stashSize = numStashBlocks << m
 
+    protected val stash: Array[T]
+
+    private val deletedFromStrip = BitSet( stripSize )
+
+    private val valueInStash     = BitSet( stashSize )
 
     // End of initialization
 
@@ -238,16 +246,17 @@ object LinBin {
           false
         else {
           // Insert into a stash block
-          val insertionPoint = ~ stashIndex
-          val blockStart     = insertionPoint & stashBlockMask
-          val blockEnd       = blockStart + stashBlockSize
-          val blockLast      = lastInBlock(blockStart, blockEnd)
-          if ( insertionPoint < blockLast ) {
-            Array.copy(stash, insertionPoint, stash, insertionPoint + 1, blockLast - insertionPoint)
-            valueInStash(blockLast + 1)  = true
+          val insertPt   = ~ stashIndex
+          val start     = blockStart(insertPt)
+          val end       = blockEnd(start)
+          val last      = lastInBlock(start, end)
+          if ( insertPt < last ) {
+            Array.copy(stash, insertPt, stash, insertPt + 1, last - insertPt)
+            valueInStash(last + 1)  = true
           } else
-            valueInStash(insertionPoint) = true
-          stash(insertionPoint) = item
+            valueInStash(insertPt) = true
+
+          stash(insertPt) = item
           // Report success
           true
         }
@@ -276,13 +285,13 @@ object LinBin {
         val (stashIndex, stashItem) = stashSearch(key, ~ stripIndex)
         if (stashIndex >= 0) {
           // remove from stash block
-          val deletionPoint  = stashIndex
-          val blockStart     = deletionPoint & stashBlockMask
-          val blockEnd       = blockStart + stashBlockSize
-          val blockLast      = lastInBlock(blockStart, blockEnd)
-          if (deletionPoint < blockLast)
-            Array.copy(stash, deletionPoint + 1, stash, deletionPoint, blockLast - deletionPoint - 1)
-          valueInStash(blockLast) = false
+          val deletePt  = stashIndex
+          val start     = blockStart(deletePt)
+          val end       = blockEnd(start)
+          val last      = lastInBlock(start, end)
+          if (deletePt < last)
+            Array.copy(stash, deletePt + 1, stash, deletePt, last - deletePt - 1)
+          valueInStash(last) = false
 
           // Report success
           true
@@ -307,7 +316,7 @@ object LinBin {
       var index    = minIndex
 
       while (true) {
-        val midIndex = index + ((maxIndex-minIndex) / 2)
+        val midIndex = index + ((maxIndex-index) / 2)
         val midItem  = strip(midIndex)
         val midKey   = extractKey(midItem)
         val cmp      = ord.compare(key, midKey)
@@ -344,7 +353,7 @@ object LinBin {
 
       while (true) {
         val minIndex = (offset | chunk) << m
-        var maxIndex = lastInBlock(minIndex, minIndex + stashBlockSize)
+        var maxIndex = lastInBlock(minIndex, blockEnd(minIndex))
 
         if (maxIndex < 0) {
           return ( -1, defaultValue )
@@ -353,7 +362,7 @@ object LinBin {
           var index = minIndex
           var cont  = true
           while(cont) {
-            val midIndex = index + ((maxIndex-minIndex) / 2)
+            val midIndex = index + ((maxIndex-index) / 2)
             val midItem  = stash(midIndex)
             val midKey   = extractKey(midItem)
             val cmp      = ord.compare(key, midKey)
@@ -402,8 +411,8 @@ object LinBin {
       while (true) {
         // minIndex <= maxIndex <= blockEnd (except if block has no values at all in which case maxIndex == -1)
         val minIndex = ( offset | chunk ) << m
-        val blockEnd = minIndex + stashBlockSize
-        var maxIndex = lastInBlock(minIndex, blockEnd)
+        val endIndex = blockEnd(minIndex)
+        var maxIndex = lastInBlock(minIndex, endIndex)
 
         if (maxIndex < 0) {
          // We have reached a top level that is empty
@@ -415,11 +424,11 @@ object LinBin {
             return ( ~ empty, defaultValue )
         }
         else {
-          val free  = blockEnd - maxIndex
+          val free  = endIndex - maxIndex
           var index = minIndex
           var cont  = true
           while(cont) {
-            val midIndex = index + ((maxIndex-minIndex) / 2)
+            val midIndex = index + ((maxIndex-index) / 2)
             val midItem  = stash(midIndex)
             val midKey   = extractKey(midItem)
             val cmp      = ord.compare(key, midKey)
@@ -480,7 +489,7 @@ object LinBin {
 
       var index    = minIndex
       while (index <= maxIndex) {
-        val midIndex = index + ((maxIndex-minIndex) / 2)
+        val midIndex = index + ((maxIndex-index) / 2)
 
         val left     = valueInStash(midIndex - 1)
         val here     = valueInStash(midIndex)
@@ -497,7 +506,14 @@ object LinBin {
     }
 
     @inline
+    private def blockStart(index: Int): Int = index & stashBlockMask
+
+    @inline
+    private def blockEnd(startIndex: Int): Int = startIndex + stashBlockSize - 1
+
+    @inline
     private def chunkNr(from: Int): Int = from >> numChunkBits /* n - l */
+
 
     /*
 
@@ -527,33 +543,27 @@ object LinBin {
 
   }
 
-  final class ItemLinBin[@specialized(Short, Int, Long, Float, Double) T]
-                          (val n: Int, val m: Int, val l: Int, val defaultValue: T,
-                           protected val strip: Array[T])
-                          (implicit val ord: Ordering[T], val mf: Manifest[T])
+  sealed class ItemLinBin[@specialized(Short, Int, Long, Float, Double) T]
+                         (val n: Int, val l: Int, val m: Int, val defaultValue: T,
+                          override protected val strip: Array[T],
+                          override protected val stash: Array[T])
+                         (implicit val ord: Ordering[T], val mf: Manifest[T])
     extends LinBin[T, T] {
 
     @inline
     def extractKey(item: T) = item
   }
 
-  final class KeyLinBin[@specialized(Short, Int, Long, Float, Double) K,
-                        @specialized(Short, Int, Long, Float, Double) T]
-                         (val n: Int, val m: Int, val l: Int, val defaultValue: T,
-                          protected val strip: Array[T])
+  sealed class KeyLinBin[@specialized(Short, Int, Long, Float, Double) K,
+                         @specialized(Short, Int, Long, Float, Double) T]
+                         (val n: Int, val l: Int, val m: Int, val defaultValue: T,
+                          override protected val strip: Array[T],
+                          override protected val stash: Array[T])
                          (val extractor: (T => K))
                          (implicit val ord: Ordering[K], val mf: Manifest[T])
     extends LinBin[K, T] {
 
     @inline
     def extractKey(item: T) = extractor(item)
-  }
-}
-
-object Test {
-  def main(args: Array[String]) {
-    val linbin1 = LinBin.fromItemSortedArray(4, 2, 1, Array(0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15))
-
-    System.out.println("Check")
   }
 }
