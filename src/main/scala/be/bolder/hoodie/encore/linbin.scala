@@ -1,547 +1,559 @@
 package be.bolder.hoodie.encore.linbin
 
-import math.BigInt
-import util.Sorting
-import java.io.DataInput
+import collection.mutable.BitSet
+import scala.Array
 import java.lang.{IllegalStateException, IllegalArgumentException}
 
-sealed class StashOverflowException extends RuntimeException("Insert failure due to linbin stash overflow")
+final class StashOverflowException extends RuntimeException("Insert failure due to linbin stash overflow")
 
-object StashOverflowException extends StashOverflowException
+final class KeyNotFoundException extends NoSuchElementException("Provided key was not found")
 
+trait LinBinOps[K, T] {
 
-/*
- * This is a factory class for linbins.
- *
- * A linbin is a mix between a sorted array and an binary tree. Both data structures are interspersed with each other.
- *
- * The array is for fast key search; while the tree buffers inserts in a cache conscious way to avoid having to
- * sort the array too often
- *
- * Intended use is as a *building*block* for dictionary structures that need very fast, very frequent lookup of sorted
- * keys but need to handle a small to medium number of inserts, and deletes, too
- *
- * The idea is to intersperse the tree (called the stash) with the array (called the core) in such a way as to get
- *
- * (1) good cache locality
- *
- * (2) at most a small number of linear compares when searching the stash after not having found an item in the core
- *     (Parameters are chosen as to make stash search not more expensive than a second logn lookup assuming
- *      2011 hardware, i.e. roughly 50-100 linear scans corresponding to a log lookup)
- *
- * (3) assuming inserts are not totally skewed, a much higher number of inserts before the linbin needs to be
- *     resorted/split for further inserts.
- *
- * (4) Additionally, linbins can turn into classic sorted constant array on request / when full
- *
- * The interspersing of core (array) and stash (tree) is best explained with an example. In the following,
- * "X" is a stash section, "O" is a data section (number of bits are parametrized during LinBin factory construction)
- *
- * Assume numStashLayers = 3. You get the following layout
- *
- * X X X O X O X X O X O X X X O X O X X O X O
- *
- * Assume you searched for an item k, and your closest match for k is "?":
- *
- * X X X O X O X X O X ? X X X O X O X X O X O
- *
- *  Linear stash search will also check numStashLayers stash entries marked with "!":
- *
- * ! X X O X O ! X O ! ? X X X O X O X X O X O
- *
- * These contain about 50 items using the default parameters of LinBinFactory.DefaultXYZ factory instances
- *
- * If your closest match was "-":
- *
- * X X X O X O X X - X ? X X X O X O X X O X O
- *
- * The stash would be searched at
- *
- * ! X X O X O ! ! - X ? X X X O X O X X O X O
- *
- * i.e. different stash searches may use the same elements. Therefore the tree like stash acts a bit
- * like a hash table collision strategy
- *
- * On insert, first the relevant core section is found (using binary search over the core elements without looking at
- * the stash). Then from closest, to farthest, the stash elements are checked for a free position for the inserted item
- * using linear search.  If one is found, the item is put there and the stash element is resorted
- *
- * When an item cannot be inserted, the whole underlying array is sorted and the linbin becomes a regular sorted
- * array and needs to be split/added to new linbins in order to be available for insertion again.
- *
- * For large stashes, each stash section may be kept sorted (IDEA; NOT IMPLEMENTED)
- *
- * Additionally, as long is there is still room, items may be added for plain linear scanning at the end of the
- * underlying array after the stash has been exhausted (IDEA; NOT IMPLEMENTED)
- *
- * @author Stefan Plantikow <stefan.plantikow@googlemail.com>
- *
- */
-sealed class LinBinFactory(val elemAddrBits: Int,       /* log_2(num sorted elements) */
-                           val stashLayout: (Int, Int)) /* (Num stash layers, log_2 (num elements per stash block)) */
-{
-  final val numStashLevels = stashLayout._1
-  final val stashNodeBits  = stashLayout._2
-  final val stashNodeSize  = 1 << stashNodeBits
+  def extractKey(item: T): K
 
-  {
-    // Preconditions that verify constructor parameters
+  @throws(classOf[KeyNotFoundException])
+  def apply(item: K): T
 
-    if (elemAddrBits < 4)
-        throw new IllegalArgumentException("elemAddrBits < 4")
+  def contains(item: K): Boolean
 
-    if (numStashLevels < 1)
-        throw new IllegalArgumentException("numStashLayers < 1")
+  def getDefault(item: K, defaultValue: T): T
 
-    if (stashNodeSize <= 0)
-        throw new IllegalArgumentException("stashNodeSize negative or zero")
+  def getOption(item: K): Option[T]
 
-    if (numStashLevels > elemAddrBits)
-        throw new IllegalArgumentException("stashAddrBits > elemAddrBits")
+  def +=(item: T): Boolean
 
+  def -=(item: T): Boolean
 
+  // def min: T
+
+  // def max: T
+
+  // def scanFrom(start: T): Iterator
+
+  // def iterator: Iterator[T]
+
+}
+
+object LinBin {
+
+  class DefaultValue[+T](@inline val value: T)
+
+  object DefaultValue {
+    implicit object Short extends DefaultValue[Short](0)
+    implicit object Int extends DefaultValue[Int](0)
+    implicit object Long extends DefaultValue[Long](0L)
+    implicit object Float extends DefaultValue[Float](0.0f)
+    implicit object Double extends DefaultValue[Double](0.0d)
+    implicit object AnyRef extends DefaultValue[Null](null)
   }
 
-  // Number of elements to be stored directly in the sorted portion of the array
-  val numCoreElements   = 1 << elemAddrBits
+  def fromItemSortedArray[@specialized(Short, Int, Long, Float, Double) T](n: Int, l: Int, m: Int, data: Array[T])
+                            (implicit ord: Ordering[T], defaultValue: DefaultValue[T], mf: Manifest[T]): LinBin[T, T] =
+    new ItemLinBin[T](n, m, l, defaultValue.value, data)
 
-  // Maximum number of elements to be stored in the stash
-  val numStashElements  = {
-    val value = BigInt(2).pow(numStashLevels+1).-(2).*(stashNodeSize)
-    if (value > Int.MaxValue)
-      throw new IllegalArgumentException("Stash is too large")
-    value.toInt
-  }
+  def fromKeySortedArray[@specialized(Short, Int, Long, Float, Double) K,
+                         @specialized(Short, Int, Long, Float, Double) T]
+                        (n: Int, l: Int, m: Int, data: Array[T])(extractor: (T => K))
+                        (implicit ord: Ordering[K], defaultValue: DefaultValue[T], mf: Manifest[T]): LinBin[K, T] =
+    new KeyLinBin[K, T](n, m, l, defaultValue.value, data)(extractor)
 
-  // Size of the underlying array of linbins created by this factory
-  private val numArrayElements  = {
-    val value = BigInt(2).pow(elemAddrBits) + numStashElements
+  /*
+   * This is the implementation class of LinBins
+   *
+   * See the companion object for docs
+   *
+   * @author Stefan Plantikow <stefan.plantikow@googlemail.com>
+   *
+   */
+  sealed trait LinBin[@specialized(Short, Int, Long, Float, Double) K, @specialized(Short, Int, Long, Float, Double) T]
+    extends LinBinOps[K, T] {
 
-    if (value > Int.MaxValue)
-      throw new IllegalArgumentException("Parameters to large to yield addressable array")
+    // Number of elements in strip array = 2^n
+    val n: Int
 
-    numCoreElements + numStashElements
-  }
+    // Number of stash levels
+    val l: Int
 
-  // Size of sorted chunks between stash sections
-  private val coreLeafSize = numCoreElements >> numStashLevels
+     // Number of elements per stash block = 2^m
+    val m: Int
 
-  private val coreMidPoint = numCoreElements >> 1
+    // Strip of presorted items
+    protected val strip: Array[T]
 
-  // The following precomputed arrays are used in linbin instances to address the underlying array
-  // without having to recompute the interspersing again and again
+    // Ordering used for sorting
+    val ord: Ordering[K]
 
-  // Maps from index of element in "virtual" array of all core elements to position in underlying array
-  private val eltsIndex    = Array.fill[Int](numCoreElements)(-1)
+    // Default value of type T (used as a dummy values in tuples missing some component)
+    val defaultValue: T
 
-  // Maps from position in underlying array to position of parent stash element in underlying array
-  private val stashParents = Array.fill[Int](numArrayElements)(-1)
+    // Manifest of item type
+    protected val mf: Manifest[T]
 
-  {
-    // Computes eltsIndex and stashParents
-
-    // Constants for computing core and stash interleaving
-    //
-    // bitSum(i) is the distance for moving over half the array of stash and core elements to the opposing stash
-    // element at level i
-    //
-    // which is      ( 2^(i+1)-1 ) * stashNodeSize + ( 2^i * coreLeafSize )
-    // optionally  + ( numStashLayers * stashNodeSize ) [ <-- excluded here and added implicitly by markLevel below ]
-    //
-    val bitSums = ( for(i <- 0.until(numStashLevels))
-                          yield (  (((1 << (i + 1)) - 1) * stashNodeSize)
-                                 + ((1 << i) * coreLeafSize)
-                                ) ).toArray
-
-    def markLevel(parent: Int, leftSum: Int, level: Int) {
-      if (level < 0)
-          return
-
-      for (i <- leftSum.until(leftSum+stashNodeSize))
-        stashParents(i) = parent
-      markLevel(leftSum, leftSum+stashNodeSize, level-1)
-
-      val rightSum = leftSum + bitSums(level)
-      for (i <- rightSum.until(rightSum+stashNodeSize))
-        stashParents(i) = parent
-      markLevel(rightSum, rightSum+stashNodeSize, level-1)
-    }
-
-    // Construct parent tree in stashParents array
-    markLevel(0, stashNodeSize, numStashLevels-1)
-
-    // Construct linear order from stashParents array in eltsIndex array
-    var count = 0
-    for (i <- 0.until(numArrayElements)) {
-      val parent = stashParents(i)
-      if (parent < 0) {
-        eltsIndex(count) = i
-        count += 1
-      }
-    }
-
-    // Fix stashParents array such that core leaves point to their leftmost stash node as their parent
-    var parent = 0
-    var prev   = -1
-    for (j <- 0.until(stashParents.length)) {
-      val cur = stashParents(j)
-      if (cur >= 0) {
-        if (cur != prev)
-          parent = j
-      }
-      else
-        stashParents(j) = parent
-      prev = cur
-    }
-
-    // Set parent of root element to -1 (helps with looping, resp. loop abortion)
-    stashParents(0) = -1
-  }
-
-  // Create an empty linbin
-  def empty[T](emptyValue: T)(implicit mf: Manifest[T], ord: Ordering[T]) =
-    new LinBin[T]( emptyValue, Array.fill[T]( numArrayElements )( emptyValue ), 0, 0 )
-
-  // Creates a new linbin from the seqLength data items in seq
-  //
-  // Expects seq to be sorted in accordance with ord. This is not checked and your responsibility
-  //
-  def fromSortedSeq[T](emptyValue: T)(seq: Seq[T], seqLength: Int)
-                      (implicit mf: Manifest[T], ord: Ordering[T]): LinBin[T] =
-  {
-    // We check this as it is an easy mistake, all other misalignment will turn into IndexOutOfBounds
-    if (seqLength > numCoreElements)
-      throw new IllegalArgumentException("Input sequence is too large")
-
-    val leftStart = coreMidPoint - seqLength / 2
-    var count     = 0
-    val data      = Array.ofDim[T]( numArrayElements )
-    for (elem <- seq.take(seqLength)) {
-      data(eltsIndex(leftStart + count)) = elem
-      count += 1
-    }
-
-    if (count != seqLength)
-      throw new IllegalArgumentException("There was not enough data in the seq")
-
-    new LinBin[T]( emptyValue, data, leftStart, seqLength )
-  }
-
-  // Creates a new linbin from the data in arr(start).until(arr(start+length))
-  //
-  // Expects data to be sorted in accordance with ord. This is not checked and your responsibility
-  //
-  def fromSortedArray[T](emptyValue: T, arr: Array[T], start: Int, length: Int)
-                        (implicit mf: Manifest[T], ord: Ordering[T]): LinBin[T] =
-  {
-    // We check this as it is an easy mistake, all other misalignment will turn into IndexOutOfBounds
-    if (length > numCoreElements)
-      throw new IllegalArgumentException("Input data is too large")
-
-    val leftStart = coreMidPoint - length / 2
-    var count     = 0
-    val data      = Array.fill[T]( numArrayElements )( emptyValue )
-    for (i <- start.until(start + length)) {
-      data(eltsIndex(leftStart + count)) = arr(i)
-      count += 1
-    }
-
-    new LinBin[T]( emptyValue, data, leftStart, length )
-  }
-
-  def fromSortedArray[T](emptyValue: T, arr: Array[T])(implicit mf: Manifest[T], ord: Ordering[T]): LinBin[T] =
-    fromSortedArray(emptyValue, arr, 0, arr.length)
-
-
-  final protected class LinBin[@specialized T](val emptyValue: T, protected val data: Array[T],
-                                               dataStart: Int, dataLen: Int)
-                                              (implicit mf: Manifest[T], ord: Ordering[T])
-  {
-    protected var start = dataStart
-    protected var len   = dataLen
-
-    def apply(value: T): T = {
-      val corePos = dataSearch(value)
-      if (corePos >= 0) {
-        data(eltsIndex(corePos))
-      } else {
-        val stashPos = stashSearch(value, stashParents(eltsIndex(math.abs(corePos))))
-        if (stashPos >= 0)
-          data(stashPos)
-        else
-          emptyValue
-      }
-    }
-
-    def contains(value: T): Boolean = ! ord.equiv(apply(value), emptyValue)
-
-    def getOption(value: T): Option[T] = {
-      val result = apply(value)
-      if (ord.ne(result, emptyValue))
-        Some(result)
-      else
-        None
-    }
-
-    // Adds value to this linbin
-    //
-    // Returns true, if that was possible, false if there was an equiv duplicate
-    //
-    // Throws StashOverflowException if the item could not be added due to stash overflow
-    //
-    @throws(classOf[be.bolder.hoodie.encore.linbin.StashOverflowException])
-    def +=(value: T): Boolean = {
-      val corePos = dataSearch(value, dataStart, dataLen)
-      if (corePos >= 0) {
-        false
-      } else
-        stashInsert(value, stashParents(eltsIndex(math.abs(corePos))))
-    }
-
-    // Finds item in the core using binary search
-    //
-    // Returns core index of found item or negative index of best match
-    //
     @inline
-    private def coreSearch(item: T, from: Int, len: Int): Int = {
-      var index    = from
-      var maxIndex = from + len -1
+    def extractKey(item: T): K
 
-      while (index <= maxIndex) {
-        val midIndex = index + ((maxIndex-index)/2)
-        val midValue = data(eltsIndex(midIndex))
+    if (n < 1)
+      throw new IllegalArgumentException("n < 1")
+    if (n > 30)
+       throw new IllegalArgumentException("n > 30")
 
-        val cmp      = ord.compare(item, midValue)
+    if (l < 0)
+      throw new IllegalArgumentException("l < 0")
+    if (l > 29)
+       throw new IllegalArgumentException("l > 29")
 
-        if (cmp == 0) /* equiv */
-          return midIndex
-        else {
-          if (cmp < 0) /* lt */
-            maxIndex = midIndex - 1
-          else
-            index = midIndex + 1
-        }
-      }
-      - index
+    if (m < 0)
+      throw new IllegalArgumentException("m < 0")
+    if (m > 28)
+      throw new IllegalArgumentException("m > 28")
+
+    if ((l == 0) || (l + m > n))
+      throw new IllegalArgumentException("l + m > n")
+
+
+    val maxStripSize   = 1 << n
+
+    val stashBlockSize = 1 << m
+
+    val stashBlockMask = ~ ( stashBlockSize - 1 )
+
+    val numStashBlocks = ( 1 << (l+1) ) - 2
+
+    val numChunkBits   = n - l
+
+    val chunkSize      = 1 << numChunkBits
+
+    private val stash  = Array.ofDim[T]( numStashBlocks << m)(mf)
+
+    @inline
+    def stashSize = stash.length
+
+    private def initStrip() {
+      if (strip eq null)
+        throw new NullPointerException
+      if (strip.length > maxStripSize)
+        throw new IllegalArgumentException("Provided data array too big for given parameters")
     }
 
-    // Finds item in the underlying data array using binary search
+    // Must go into separate function due to a bug  of @specialized
+    // (compiler barfs when accessing strip array otherwise)
+    initStrip()
+
+    def stripSize = strip.length
+
+    private val deletedFromStrip = BitSet(stripSize)
+    private val valueInStash     = BitSet(stashSize)
+
+
+    // End of initialization
+
+    // Accessors
     //
-    // Returns core index of found item or negative index of best match
-    //
-    @inline
-    private def dataSearch(item: T, from: Int, len: Int): Int = {
-      var index    = from
-      var maxIndex = from + len -1
 
-      while (index <= maxIndex) {
-        val midIndex = index + ((maxIndex-index)/2)
-        val midValue = data(midIndex)
-
-        val cmp      = ord.compare(item, midValue)
-
-        if (cmp == 0) /* equiv */
-          return midIndex
-        else {
-          if (cmp < 0) /* lt */
-            maxIndex = midIndex - 1
-          else
-            index = midIndex + 1
-        }
-      }
-      - index
-    }
-
-    // Finds item in stash starting from stash startStash up to the top
-    //
-    // Returns core index if found, -1 otherwise
-    //
-    @inline
-    private def stashSearch(item: T, startStash: Int): Int = {
-      var parent = startStash
-
-      while (parent != -1) {
-        val limit = parent + stashNodeSize
-        var i     = parent
-        var cmp    = 0
-
-        do {
-          cmp = ord.compare(data(i), item)
-          if (cmp == 0)
-            return i
-        } while ((i < limit) && (cmp > 0))
-        parent = stashParents(parent)
-      }
-      -1
-    }
-
-    // Inserts item in stash starting from stash startStash unless it finds a duplicate
-    //
-    // Returns false, if a duplicate was found, true if item was inserted, and throws StashOverflowException
-    // if there was not enough room to insert the item
-    @inline
-    @throws(classOf[be.bolder.hoodie.encore.linbin.StashOverflowException])
-    private def stashInsert(item: T, startStash: Int): Boolean = {
-      var parent      = startStash
-      var cmp         = 0
-      var emptyParent = -1
-      var emptyIndex  = -1
-
-      // search stash for item or first occurrence of an empty item, whatever comes first
-      while ((parent != -1) && (emptyIndex < 0)) {
-        val limit = parent + stashNodeSize
-        var i     = parent
-        do {
-          val cur = data(i)
-          cmp = ord.compare(item, cur)
-          if (cmp == 0)
-            return false
-
-          if (ord.equiv(emptyValue, cur)) {
-            emptyParent = parent
-            emptyIndex  = i
-          }
-          i += 1
-        } while ((i < limit) && (cmp < 0) && (emptyIndex < 0))
-        parent = stashParents(parent)
-      }
-
-      // deal w. case that after the empty item the real item is in the current stash element
-      if (emptyIndex >= 0) {
-        var i     = emptyIndex + 1
-        val limit = emptyParent + stashNodeSize
-        if (i < limit) {
-          do {
-            val cur = data(i)
-            cmp     = ord.compare(item, cur)
-            if (cmp == 0)
-              return false
-            i += 1
-          } while ((i < limit) && (cmp > 0))
-        }
-      }
-
-      // keep searching for item in remaining stash elements
-      while (parent != -1) {
-        val limit = parent + stashNodeSize
-        var i     = parent
-        do {
-          val cur = data(i)
-          cmp = ord.compare(cur, item)
-          if (cmp == 0)
-            return false
-          i+= 1
-        } while ( ((i < limit)) && (cmp > 0))
-        parent = stashParents(parent)
-      }
-
-      // We did not find the item in here
-
-      // We don't have place to insert
-      if (emptyIndex == -1)
-        throw StashOverflowException
+    @throws(classOf[KeyNotFoundException])
+    def apply(item: K): T = {
+      // Find item in strip and stash
+      val (stripIndex, stripItem) = stripSearch(item, 0, strip.length)
+      if ( (stripIndex >= 0) && (!deletedFromStrip(stripIndex)) )
+        stripItem
       else {
-        // We do and thus insert it
+        val (stashIndex, stashItem) = stashSearch(item, ~ stripIndex)
+        if ( (stashIndex >=0) && valueInStash(stashIndex) )
+          stashItem
+        else
+          // If not found:
+          throw new KeyNotFoundException
+      }
+    }
 
-        // For this, find the insertion point first
-        val limit = parent + stashNodeSize
-        var i     = emptyParent
-        while (i < limit) {
-          if ((ord.gt(data(i), item))) {
-            if (emptyIndex < i) {
-                Array.copy(data, emptyIndex + 1, data, emptyIndex, i - emptyIndex)
-                data(i) = item
-                return true
-            } else if (emptyIndex > i) {
-                Array.copy(data, i, data, i + 1, emptyIndex - i)
-                data(i) = item
-                return true
-            }
-          }
-          i += 1
+    def contains(item: K): Boolean = {
+      // Find item in strip and stash
+      val (stripIndex, stripItem) = stripSearch(item, 0, strip.length)
+      if ( (stripIndex >= 0) && (!deletedFromStrip(stripIndex)) )
+        true
+      else {
+        val (stashIndex, stashItem) = stashSearch(item, ~ stripIndex)
+        if ( (stashIndex >=0) && valueInStash(stashIndex) )
+          true
+        else
+          // If not found:
+          false
+      }
+    }
+
+    def getDefault(item: K, defaultValue: T): T = {
+      // Find item in strip and stash
+      val (stripIndex, stripItem) = stripSearch(item, 0, strip.length)
+      if ( (stripIndex >= 0) && (!deletedFromStrip(stripIndex)) )
+        stripItem
+      else {
+        val (stashIndex, stashItem) = stashSearch(item, ~ stripIndex)
+        if ( (stashIndex >=0) && valueInStash(stashIndex) )
+          stashItem
+        else
+          // If not found:
+          defaultValue
+      }
+    }
+
+    def getOption(item: K): Option[T] = {
+      // Find item in strip and stash
+      val (stripIndex, stripItem) = stripSearch(item, 0, strip.length)
+      if ( (stripIndex >= 0) && (!deletedFromStrip(stripIndex)) )
+        Some(stripItem)
+      else {
+        val (stashIndex, stashItem) = stashSearch(item, ~ stripIndex)
+        if ( (stashIndex >=0) && valueInStash(stashIndex) )
+          Some(stashItem)
+        else
+          // If not found:
+          None
+      }
+    }
+
+
+    def +=(item: T): Boolean = {
+      val key = extractKey(item)
+
+      // Search strip
+      val (stripIndex, stripItem) = stripSearch(key, 0, strip.length)
+
+      if ( stripIndex >= 0 ) {
+        // Found item in strip
+        if (deletedFromStrip(stripIndex)) {
+          // Un-delete it
+          deletedFromStrip(stripIndex) = true
+          true
+        }
+        else
+          // Report (already deleted thus) non-existing item
+          false
+      } else {
+        // Search stash
+        val (stashIndex, stashItem) = stashInsert(key, ~ stripIndex)
+
+        if (stashIndex >= 0)
+          // Report duplicate
+          false
+        else {
+          // Insert into a stash block
+          val insertionPoint = ~ stashIndex
+          val blockStart     = insertionPoint & stashBlockMask
+          val blockEnd       = blockStart + stashBlockSize
+          val blockLast      = lastInBlock(blockStart, blockEnd)
+          if ( insertionPoint < blockLast ) {
+            Array.copy(stash, insertionPoint, stash, insertionPoint + 1, blockLast - insertionPoint)
+            valueInStash(blockLast + 1)  = true
+          } else
+            valueInStash(insertionPoint) = true
+          stash(insertionPoint) = item
+          // Report success
+          true
         }
       }
-      // We should not get here
+    }
+
+
+    def -=(item: T): Boolean = {
+      val key = extractKey(item)
+
+      // Search strip
+      val (stripIndex, stripItem) = stripSearch(key, 0, strip.length)
+
+      if ( stripIndex >= 0 ) {
+        // Found item in strip
+        if (deletedFromStrip(stripIndex)) {
+          // Item not found
+          false
+        }
+        else
+          // Delete it
+         deletedFromStrip(stripIndex) = true
+        true
+      } else {
+        // Search stash
+        val (stashIndex, stashItem) = stashSearch(key, ~ stripIndex)
+        if (stashIndex >= 0) {
+          // remove from stash block
+          val deletionPoint  = stashIndex
+          val blockStart     = deletionPoint & stashBlockMask
+          val blockEnd       = blockStart + stashBlockSize
+          val blockLast      = lastInBlock(blockStart, blockEnd)
+          if (deletionPoint < blockLast)
+            Array.copy(stash, deletionPoint + 1, stash, deletionPoint, blockLast - deletionPoint - 1)
+          valueInStash(blockLast) = false
+
+          // Report success
+          true
+        } else
+          // Item not found
+          false
+      }
+    }
+
+    // Find key in strip starting from from to length using binary search
+    //
+    // If key is found, returns ( strip index, strip value )
+    //
+    // Otherwise, returns ( - index - 1, value ) of last field visited
+    //
+    // Does NOT consult deletedFromStrip
+    //
+    @inline
+    private def stripSearch(key: K, from: Int, length: Int): (Int, T) = {
+      val minIndex = from
+      var maxIndex = from + length - 1
+      var index    = minIndex
+
+      while (true) {
+        val midIndex = index + ((maxIndex-minIndex) / 2)
+        val midItem  = strip(midIndex)
+        val midKey   = extractKey(midItem)
+        val cmp      = ord.compare(key, midKey)
+        if (cmp == 0)
+          return (midIndex, midItem)
+        else {
+          if (cmp < 0)
+            maxIndex = midIndex - 1
+          else
+            index    = midIndex + 1
+        }
+
+        if (index > maxIndex)
+          // Negation works here since we don't use the upper bit anyways (n<=30)
+          return ( ~ midIndex, midItem)
+      }
+
       throw new IllegalStateException("Unreachable")
     }
+
+    // Search hierarchy of stash blocks starting from stash block block up to the top for key
+    //
+    // If key is found, returns ( stash index, stash value )
+    //
+    // Otherwise, returns ( -1, defaultValue )
+    //
+    // Does NOT consult emptyInStash except for finding block borders
+    //
+    @inline
+    private def stashSearch(key: K, block: Int): (Int, T)  = {
+      var level  = l
+      var chunk  = chunkNr(block)
+      var offset = 0
+
+      while (true) {
+        val minIndex = (offset | chunk) << m
+        var maxIndex = lastInBlock(minIndex, minIndex + stashBlockSize)
+
+        if (maxIndex < 0) {
+          return ( -1, defaultValue )
+        }
+        else {
+          var index = minIndex
+          var cont  = true
+          while(cont) {
+            val midIndex = index + ((maxIndex-minIndex) / 2)
+            val midItem  = stash(midIndex)
+            val midKey   = extractKey(midItem)
+            val cmp      = ord.compare(key, midKey)
+            if (cmp == 0)
+              return ( midIndex, midItem )
+            else {
+              if (cmp < 0)
+                maxIndex = midIndex - 1
+              else
+                index    = midIndex + 1
+            }
+            if (index > maxIndex) {
+              if (level == 1)
+                return ( -1, defaultValue )
+              else
+                cont = false
+            }
+          }
+        }
+        offset  += 1 << (l - level)
+        chunk  >>= 1
+        level   -= 1
+      }
+
+      throw new IllegalStateException("Unreachable")
+    }
+
+    // Search hierarchy of stash blocks starting from stash block from up to the top for key
+    //
+    // If key is found, returns ( stash index, stash value )
+    //
+    // Otherwise, returns where it would like to place the key in the form ( ~ stash index, defaultValue )
+    //
+    // If there is no free space left in the stash, throws StashOverflowException
+    //
+    // Does NOT consult emptyInStash except for finding block borders
+    //
+    @inline
+    @throws(classOf[StashOverflowException])
+    private def stashInsert(key: K, from: Int): (Int, T)  = {
+      var level  =  l
+      var chunk  =  chunkNr(from)
+      var offset =  0
+      var empty  = -1
+
+      while (true) {
+        // minIndex <= maxIndex <= blockEnd (except if block has no values at all in which case maxIndex == -1)
+        val minIndex = ( offset | chunk ) << m
+        val blockEnd = minIndex + stashBlockSize
+        var maxIndex = lastInBlock(minIndex, blockEnd)
+
+        if (maxIndex < 0) {
+         // We have reached a top level that is empty
+          if (empty < 0)
+            // Report minIndex as insertion point if none was found before
+            return ( ~ minIndex, defaultValue )
+          else
+            // Otherwise report previous insertion point
+            return ( ~ empty, defaultValue )
+        }
+        else {
+          val free  = blockEnd - maxIndex
+          var index = minIndex
+          var cont  = true
+          while(cont) {
+            val midIndex = index + ((maxIndex-minIndex) / 2)
+            val midItem  = stash(midIndex)
+            val midKey   = extractKey(midItem)
+            val cmp      = ord.compare(key, midKey)
+            if (cmp == 0)
+              return ( midIndex, midItem )
+            else {
+              if (cmp < 0)
+                maxIndex = midIndex - 1
+              else
+                index    = midIndex + 1
+            }
+            // break loop
+            if (index > maxIndex) {
+              // No insertion point found and free space in this level?
+              if (empty < 0 && free > 0)
+                // set insertion point
+                empty = midIndex
+              if (level == 1) {
+                // last, topmost level
+                if (empty < 0)
+                  // No insertion point available
+                  throw new StashOverflowException
+                else
+                  // Report insertion point
+                  return ( ~ empty, defaultValue )
+              } else
+                cont = false
+            }
+          }
+        }
+        offset  += 1 << (l - level)
+        chunk  >>= 1
+        level   -= 1
+      }
+
+      throw new IllegalStateException("Unreachable")
+    }
+
+    // Binary search on valueInStash bit field to determine the block length
+    //
+    // Returns last index in block that holds a value or -1 if no index in block holds a value
+    //
+    @inline
+    private def lastInBlock(start: Int, end: Int): Int = {
+      /* This is a variant of binary search that assumes the underlying data looks like
+         either 0...0 or 1...1 or 1...1...0
+
+         and searches for the last "1" (i.e. the first "10" substring)
+
+         To do so, we define an order over neighbour bits and ensure the initial bit is not 0 before
+         entering the binary search
+       */
+      if (! valueInStash(start))
+        return -1
+
+      val minIndex = start + 1
+      var maxIndex = end
+
+      var index    = minIndex
+      while (index <= maxIndex) {
+        val midIndex = index + ((maxIndex-minIndex) / 2)
+
+        val left     = valueInStash(midIndex - 1)
+        val here     = valueInStash(midIndex)
+
+        if (left) {
+          if (here)
+            maxIndex = midIndex - 1
+          else
+            return midIndex - 1
+        } else
+          index = midIndex + 1
+      }
+      end
+    }
+
+    @inline
+    private def chunkNr(from: Int): Int = from >> numChunkBits /* n - l */
+
+    /*
+
+    private val levelOffsets = {
+      val offsets = Array.ofDim[Int](l)
+
+      for (level <- 1.until(l))
+        offsets(level) = offsets(level-1) + (1 << (l-level+1))
+
+      offsets
+    }
+
+    @inline
+    private def blockAddr(from: Int, level: Int): Int = {
+      // Compute chunk addr
+      val chunk        = chunkNr(from)
+      // Compute inverse level
+      val inverseLevel = l - level
+      // Compute number of stash block
+      val blockOffset  = from >> inverseLevel
+      val blockNr      = levelOffsets(inverseLevel) | blockOffset
+      // Convert to stash index by shifting by block size
+      blockNr << m
+    }
+
+    */
+
+  }
+
+  final class ItemLinBin[@specialized(Short, Int, Long, Float, Double) T]
+                          (val n: Int, val m: Int, val l: Int, val defaultValue: T,
+                           protected val strip: Array[T])
+                          (implicit val ord: Ordering[T], val mf: Manifest[T])
+    extends LinBin[T, T] {
+
+    @inline
+    def extractKey(item: T) = item
+  }
+
+  final class KeyLinBin[@specialized(Short, Int, Long, Float, Double) K,
+                        @specialized(Short, Int, Long, Float, Double) T]
+                         (val n: Int, val m: Int, val l: Int, val defaultValue: T,
+                          protected val strip: Array[T])
+                         (val extractor: (T => K))
+                         (implicit val ord: Ordering[K], val mf: Manifest[T])
+    extends LinBin[K, T] {
+
+    @inline
+    def extractKey(item: T) = extractor(item)
   }
 }
 
-object LinBinFactory {
-
-  // This is optimized to get small values of linearCompares on the one hand (<50 or at least <100) but tries to keep
-  // the number of levels small, too
-
-  // How to read the constants defined below
-  //
-  // val STASH_S       = (A, B)
-  //
-  // Size(STASH_S)     = 2^(A+1) * 2^B
-  // Compares(STASH_S) = A * 2^B
-  //
-
-  val STASH_32b  = ( 2, 2)  //  8
-  val STASH_64b  = ( 2, 3)  // 16
-  val STASH_128b = ( 3, 3)  // 24
-  val STASH_256b = ( 3, 4)  // 48
-  val STASH_512b = ( 4, 4)  // 64
-  val STASH_1k   = ( 5, 4)  // 80
-  val STASH_2k   = ( 6, 4)  // 96
-  val STASH_4k   = ( 8, 3)  // 64
-  val STASH_8k   = ( 9, 3)  // 72
-  val STASH_16k  = (10, 3)  // 88
-  val STASH_32k  = (11, 3)  // 96
-  val STASH_64k  = (13, 2)  // 52
-  val STASH_128k = (14, 2)  // 56
-  val STASH_256k = (15, 2)  // 60
-
-  val SIZE_64b   = 6
-  val SIZE_128b  = 7
-  val SIZE_256b  = 8
-  val SIZE_512b  = 9
-  val SIZE_1k    = 10
-  val SIZE_2k    = 11
-  val SIZE_4k    = 12
-  val SIZE_8k    = 13
-  val SIZE_16k   = 14
-  val SIZE_32k   = 15
-  val SIZE_64k   = 16
-  val SIZE_128k  = 17
-  val SIZE_256k  = 18
-  val SIZE_512k  = 19
-  val SIZE_1024k = 20
-
-  lazy val Mini = new LinBinFactory(SIZE_64b, STASH_32b)
-
-  lazy val Default5k = new LinBinFactory(SIZE_4k, STASH_1k)
-
-  lazy val Default10k = new LinBinFactory(SIZE_8k, STASH_2k)
-
-  lazy val Default20k = new LinBinFactory(SIZE_16k, STASH_4k)
-
-  lazy val Default40k = new LinBinFactory(SIZE_32k, STASH_8k)
-
-  lazy val Default80k = new LinBinFactory(SIZE_64k, STASH_16k)
-
-  lazy val Default160k = new LinBinFactory(SIZE_128k, STASH_32k)
-
-  lazy val Default320k = new LinBinFactory(SIZE_256k, STASH_64k)
-
-  lazy val Default640k = new LinBinFactory(SIZE_512k, STASH_128k)
-
-  lazy val Default1280k = new LinBinFactory(SIZE_1024k, STASH_256k)
-}
-
-object Test  {
+object Test {
   def main(args: Array[String]) {
-    val factory = LinBinFactory.Mini
+    val linbin1 = LinBin.fromItemSortedArray(4, 2, 1, Array(0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15))
 
-    val input   = Array.fill[Double](factory.numCoreElements)( math.random )
-    Sorting.quickSort(input)
-
-    val linbin  = factory.fromSortedArray(Double.NaN, input)
-
+    System.out.println("Check")
   }
 }
-
-
