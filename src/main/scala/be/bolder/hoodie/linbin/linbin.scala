@@ -13,17 +13,17 @@ trait LinBinOps[K, T] {
   def extractKey(item: T): K
 
   @throws(classOf[KeyNotFoundException])
-  def apply(item: K): T
+  def apply(key: K): T
 
-  def contains(item: K): Boolean
+  def contains(key: K): Boolean
 
-  def getDefault(item: K, defaultValue: T): T
+  def getDefault(key: K, defaultValue: T): T
 
-  def getOption(item: K): Option[T]
+  def getOption(key: K): Option[T]
 
   def +=(item: T): Boolean
 
-  def -=(item: T): Boolean
+  def -=(key: K): Boolean
 
   // def min: T
 
@@ -36,17 +36,6 @@ trait LinBinOps[K, T] {
 }
 
 object LinBin {
-
-  class DefaultValue[+T](@inline val value: T)
-
-  object DefaultValue {
-    implicit object Short extends DefaultValue[Short](0)
-    implicit object Int extends DefaultValue[Int](0)
-    implicit object Long extends DefaultValue[Long](0L)
-    implicit object Float extends DefaultValue[Float](0.0f)
-    implicit object Double extends DefaultValue[Double](0.0d)
-    implicit object AnyRef extends DefaultValue[Null](null)
-  }
 
   def stashSize(l: Int, m: Int) = ( ( 1 << (l+1) ) - 2 ) << m
 
@@ -71,17 +60,17 @@ object LinBin {
   }
 
   def fromItemSortedArray[@specialized(Short, Int, Long, Float, Double) T](n: Int, l: Int, m: Int, data: Array[T])
-                           (implicit ord: Ordering[T], defaultValue: DefaultValue[T], mf: Manifest[T]): LinBin[T, T] = {
+                           (implicit ord: Ordering[T],  mf: Manifest[T]): LinBin[T, T] = {
     verifyParameters(n, l, m)
-    new ItemLinBin[T](n, l, m, defaultValue.value, data, Array.ofDim[T](stashSize(l, m)))
+    new ItemLinBin[T](n, l, m, data, Array.ofDim[T](stashSize(l, m)))
   }
 
   def fromKeySortedArray[@specialized(Short, Int, Long, Float, Double) K,
                          @specialized(Short, Int, Long, Float, Double) T]
                           (n: Int, l: Int, m: Int, data: Array[T])(extractor: (T => K))
-                          (implicit ord: Ordering[K], defaultValue: DefaultValue[T], mf: Manifest[T]): LinBin[K, T] = {
+                          (implicit ord: Ordering[K],  mf: Manifest[T]): LinBin[K, T] = {
     verifyParameters(n, l, m)
-    new KeyLinBin[K, T](n, l, m, defaultValue.value, data, Array.ofDim[T](stashSize(l, m)))(extractor)
+    new KeyLinBin[K, T](n, l, m, data, Array.ofDim[T](stashSize(l, m)))(extractor)
   }
 
   /*
@@ -110,9 +99,6 @@ object LinBin {
     // Ordering used for sorting
     val ord: Ordering[K]
 
-    // Default value of type T (used as a dummy values in tuples missing some component)
-    val defaultValue: T
-
     // Manifest of item type
     protected val mf: Manifest[T]
 
@@ -133,7 +119,7 @@ object LinBin {
     val chunkSize      = 1 << numChunkBits
 
 
-    private def initStrip() {
+    private[this] def initStrip() {
       if (strip eq null)
         throw new NullPointerException
       if (strip.length > maxStripSize)
@@ -160,28 +146,28 @@ object LinBin {
     //
 
     @throws(classOf[KeyNotFoundException])
-    def apply(item: K): T = {
+    def apply(key: K): T = {
       // Find item in strip and stash
-      val (stripIndex, stripItem) = stripSearch(item, 0, strip.length)
+      val stripIndex = stripSearch(key, 0, strip.length)
       if ( (stripIndex >= 0) && (!deletedFromStrip(stripIndex)) )
-        stripItem
+        strip(stripIndex)
       else {
-        val (stashIndex, stashItem) = stashSearch(item, ~ stripIndex)
+        val stashIndex = stashSearch(key, ~ stripIndex)
         if ( (stashIndex >=0) && valueInStash(stashIndex) )
-          stashItem
+          stash(stashIndex)
         else
           // If not found:
           throw new KeyNotFoundException
       }
     }
 
-    def contains(item: K): Boolean = {
+    def contains(key: K): Boolean = {
       // Find item in strip and stash
-      val (stripIndex, stripItem) = stripSearch(item, 0, strip.length)
+      val stripIndex = stripSearch(key, 0, strip.length)
       if ( (stripIndex >= 0) && (!deletedFromStrip(stripIndex)) )
         true
       else {
-        val (stashIndex, stashItem) = stashSearch(item, ~ stripIndex)
+        val stashIndex = stashSearch(key, ~ stripIndex)
         if ( (stashIndex >=0) && valueInStash(stashIndex) )
           true
         else
@@ -190,30 +176,30 @@ object LinBin {
       }
     }
 
-    def getDefault(item: K, defaultValue: T): T = {
+    def getDefault(key: K, defaultValue: T): T = {
       // Find item in strip and stash
-      val (stripIndex, stripItem) = stripSearch(item, 0, strip.length)
+      val stripIndex = stripSearch(key, 0, strip.length)
       if ( (stripIndex >= 0) && (!deletedFromStrip(stripIndex)) )
-        stripItem
+        strip(stripIndex)
       else {
-        val (stashIndex, stashItem) = stashSearch(item, ~ stripIndex)
+        val stashIndex = stashSearch(key, ~ stripIndex)
         if ( (stashIndex >=0) && valueInStash(stashIndex) )
-          stashItem
+          stash(stashIndex)
         else
           // If not found:
           defaultValue
       }
     }
 
-    def getOption(item: K): Option[T] = {
+    def getOption(key: K): Option[T] = {
       // Find item in strip and stash
-      val (stripIndex, stripItem) = stripSearch(item, 0, strip.length)
+      val stripIndex = stripSearch(key, 0, strip.length)
       if ( (stripIndex >= 0) && (!deletedFromStrip(stripIndex)) )
-        Some(stripItem)
+        Some(strip(stripIndex))
       else {
-        val (stashIndex, stashItem) = stashSearch(item, ~ stripIndex)
+        val stashIndex = stashSearch(key, ~ stripIndex)
         if ( (stashIndex >=0) && valueInStash(stashIndex) )
-          Some(stashItem)
+          Some(stash(stashIndex))
         else
           // If not found:
           None
@@ -225,7 +211,7 @@ object LinBin {
       val key = extractKey(item)
 
       // Search strip
-      val (stripIndex, stripItem) = stripSearch(key, 0, strip.length)
+      val stripIndex = stripSearch(key, 0, strip.length)
 
       if ( stripIndex >= 0 ) {
         // Found item in strip
@@ -239,7 +225,7 @@ object LinBin {
           false
       } else {
         // Search stash
-        val (stashIndex, stashItem) = stashInsert(key, ~ stripIndex)
+        val stashIndex = stashInsert(key, ~ stripIndex)
 
         if (stashIndex >= 0)
           // Report duplicate
@@ -254,7 +240,7 @@ object LinBin {
           // It holds that start <= insertPt <= last < end
 
           if (insertPt <= last) {
-            val cmp       = ord.compare(key, extractKey(stashItem))
+            val cmp       = ord.compare(key, extractKey(stash(insertPt)))
             if (cmp < 0) { /* shift right and insert */
               Array.copy(stash, insertPt, stash, insertPt + 1, last - insertPt + 1)
               stash(insertPt) = item
@@ -275,11 +261,9 @@ object LinBin {
     }
 
 
-    def -=(item: T): Boolean = {
-      val key = extractKey(item)
-
+    def -=(key: K): Boolean = {
       // Search strip
-      val (stripIndex, stripItem) = stripSearch(key, 0, strip.length)
+      val stripIndex = stripSearch(key, 0, strip.length)
 
       if ( stripIndex >= 0 ) {
         // Found item in strip
@@ -293,7 +277,7 @@ object LinBin {
         true
       } else {
         // Search stash
-        val (stashIndex, stashItem) = stashSearch(key, ~ stripIndex)
+        val stashIndex = stashSearch(key, ~ stripIndex)
         if (stashIndex >= 0) {
           // remove from stash block
           val deletePt  = stashIndex
@@ -302,10 +286,7 @@ object LinBin {
           val last      = lastInBlock(start, end)
           if (deletePt < last) {
             Array.copy(stash, deletePt + 1, stash, deletePt, last - deletePt)
-            stash(last) = defaultValue
           }
-          else
-            stash(deletePt) = defaultValue
           valueInStash(last) = false
 
           // Report success
@@ -318,14 +299,14 @@ object LinBin {
 
     // Find key in strip starting from from to length using binary search
     //
-    // If key is found, returns ( strip index, strip value )
+    // If key is found, returns strip index
     //
-    // Otherwise, returns ( - index - 1, value ) of last field visited
+    // Otherwise, returns - index - 1 of last field visited
     //
     // Does NOT consult deletedFromStrip
     //
     @inline
-    private def stripSearch(key: K, from: Int, length: Int): (Int, T) = {
+    private def stripSearch(key: K, from: Int, length: Int): Int = {
       val minIndex = from
       var maxIndex = from + length - 1
       var index    = minIndex
@@ -336,7 +317,7 @@ object LinBin {
         val midKey   = extractKey(midItem)
         val cmp      = ord.compare(key, midKey)
         if (cmp == 0)
-          return (midIndex, midItem)
+          return midIndex
         else {
           if (cmp < 0)
             maxIndex = midIndex - 1
@@ -346,7 +327,7 @@ object LinBin {
 
         if (index > maxIndex)
           // Negation works here since we don't use the upper bit anyways (n<=30)
-          return ( ~ midIndex, midItem)
+          return ~ midIndex
       }
 
       throw new IllegalStateException("Unreachable")
@@ -354,14 +335,14 @@ object LinBin {
 
     // Search hierarchy of stash blocks starting from stash block block up to the top for key
     //
-    // If key is found, returns ( stash index, stash value )
+    // If key is found, returns stash index
     //
-    // Otherwise, returns ( -1, defaultValue )
+    // Otherwise, returns -1
     //
     // Does NOT consult emptyInStash except for finding block borders
     //
     @inline
-    private def stashSearch(key: K, block: Int): (Int, T)  = {
+    private def stashSearch(key: K, block: Int): Int  = {
       var level  = l
       var chunk  = chunkNr(block)
       var offset = 0
@@ -371,7 +352,7 @@ object LinBin {
         var maxIndex = lastInBlock(minIndex, blockEnd(minIndex))
 
         if (maxIndex < 0) {
-          return ( -1, defaultValue )
+          return -1
         }
         else {
           var index = minIndex
@@ -382,7 +363,7 @@ object LinBin {
             val midKey   = extractKey(midItem)
             val cmp      = ord.compare(key, midKey)
             if (cmp == 0)
-              return ( midIndex, midItem )
+              return midIndex
             else {
               if (cmp < 0)
                 maxIndex = midIndex - 1
@@ -391,7 +372,7 @@ object LinBin {
             }
             if (index > maxIndex) {
               if (level == 1)
-                return ( -1, defaultValue )
+                return -1
               else
                 cont = false
             }
@@ -407,9 +388,9 @@ object LinBin {
 
     // Search hierarchy of stash blocks starting from stash block from up to the top for key
     //
-    // If key is found, returns ( stash index, stash value )
+    // If key is found, returns stash index
     //
-    // Otherwise, returns where it would like to place the key in the form ( ~ stash index, defaultValue )
+    // Otherwise, returns where it would like to place the key in the form - stash index - 1
     //
     // If there is no free space left in the stash, throws StashOverflowException
     //
@@ -417,7 +398,7 @@ object LinBin {
     //
     @inline
     @throws(classOf[StashOverflowException])
-    private def stashInsert(key: K, from: Int): (Int, T)  = {
+    private def stashInsert(key: K, from: Int): Int  = {
       var level  =  l
       var chunk  =  chunkNr(from)
       var offset =  0
@@ -433,10 +414,10 @@ object LinBin {
          // We have reached a top level that is empty
           if (empty < 0)
             // Report minIndex as insertion point if none was found before
-            return ( ~ minIndex, stash(minIndex) )
+            return ~ minIndex
           else
             // Otherwise report previous insertion point
-            return ( ~ empty, stash(empty) )
+            return ~ empty
         }
         else {
           val free  = endIndex - maxIndex
@@ -448,7 +429,7 @@ object LinBin {
             val midKey   = extractKey(midItem)
             val cmp      = ord.compare(key, midKey)
             if (cmp == 0)
-              return ( midIndex, midItem )
+              return midIndex
             else {
               if (cmp < 0)
                 maxIndex = midIndex - 1
@@ -468,7 +449,7 @@ object LinBin {
                   throw new StashOverflowException
                 else
                   // Report insertion point
-                  return ( ~ empty, stash(empty) )
+                  return ~ empty
               } else
                 cont = false
             }
@@ -520,6 +501,15 @@ object LinBin {
       end
     }
 
+    /*
+     * The object is broken after this call! For testing only
+     */
+    protected[hoodie] def simulateFullStash() {
+      valueInStash.clear()
+      for (i <- 0.until(stashSize))
+        valueInStash(i) = true
+    }
+
     @inline
     private def blockStart(index: Int): Int = index & stashBlockMask
 
@@ -559,7 +549,7 @@ object LinBin {
   }
 
   sealed private class ItemLinBin[@specialized(Short, Int, Long, Float, Double) T]
-                                   (val n: Int, val l: Int, val m: Int, val defaultValue: T,
+                                   (val n: Int, val l: Int, val m: Int,
                                     override protected val strip: Array[T],
                                     override protected val stash: Array[T])
                                    (implicit val ord: Ordering[T], val mf: Manifest[T])
@@ -571,7 +561,7 @@ object LinBin {
 
   sealed private class KeyLinBin[@specialized(Short, Int, Long, Float, Double) K,
                                  @specialized(Short, Int, Long, Float, Double) T]
-                                   (val n: Int, val l: Int, val m: Int, val defaultValue: T,
+                                   (val n: Int, val l: Int, val m: Int,
                                     override protected val strip: Array[T],
                                     override protected val stash: Array[T])
                                    (val extractor: (T => K))

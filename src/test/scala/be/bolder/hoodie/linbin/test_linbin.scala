@@ -3,7 +3,6 @@ package be.bolder.hoodie.linbin
 import compat.Platform
 import java.lang.IllegalStateException
 import util.Sorting
-import collection.mutable.ArrayOps
 import java.util.Arrays
 
 object SmokeTest {
@@ -42,43 +41,61 @@ object SmokeTest {
 
     System.out.println("Check")
 
+    val trials = 5
+    for (_ <- 0.until(trials)) {
 
-    val times = 100000
-    val input = Array.fill[Double](4000000)(math.random)(Manifest.Double)
-    Sorting.quickSort(input)
+      val times = 1000000
+      val input = Array.fill[Double](8000000)(math.random)(Manifest.Double)
+      Sorting.quickSort(input)
 
 
 
-    {
-      System.out.println("plain binsearch")
+      {
+        System.out.println("full stash linbin")
 
-      val start  = Platform.currentTime
-      for (t <- 0.until(times)) {
-        val inputIndex = (math.random * input.length).toInt
-        val inputValue = input(inputIndex)
-        val result = input(Arrays.binarySearch(input, inputValue))
-        if (result != inputValue)
-          throw new IllegalStateException("Retrieval error")
+        val linbin = LinBin.fromItemSortedArray[Double](23, 4, 10, input)
+        linbin.simulateFullStash
+        val start  = Platform.currentTime
+        for (t <- 0.until(times)) {
+          val inputIndex = (math.random * input.length).toInt
+          val inputValue = input(inputIndex) + 0.000000000000001d
+          val result = linbin.getDefault( inputValue, 0.0d )
+        }
+        val stop  = Platform.currentTime
+        System.out.println(stop-start)
       }
-      val stop  = Platform.currentTime
-      System.out.println(stop-start)
-    }
 
-    {
-      System.out.println("empty linbin")
+      {
+        System.out.println("empty linbin")
 
-      val linbin = LinBin.fromItemSortedArray[Double](22, 6, 11, input)
-      val start  = Platform.currentTime
-      for (t <- 0.until(times)) {
-        val inputIndex = (math.random * input.length).toInt
-        val inputValue = input(inputIndex)
-        val result = linbin( inputValue )
-        if (result != inputValue)
-          throw new IllegalStateException("Retrieval error")
+        val linbin = LinBin.fromItemSortedArray[Double](23, 1, 2, input)
+        val start  = Platform.currentTime
+        for (t <- 0.until(times)) {
+          val inputIndex = (math.random * input.length).toInt
+          val inputValue = input(inputIndex)
+          val result = linbin( inputValue )
+          if (result != inputValue)
+            throw new IllegalStateException("Retrieval error")
+        }
+        val stop  = Platform.currentTime
+        System.out.println(stop-start)
       }
-      val stop  = Platform.currentTime
-      System.out.println(stop-start)
-    }
 
+      {
+        System.out.println("plain binsearch")
+
+        val start  = Platform.currentTime
+        for (t <- 0.until(times)) {
+          val inputIndex = (math.random * input.length).toInt
+          val inputValue = input(inputIndex)
+          val result = input(Arrays.binarySearch(input, inputValue))
+          if (result != inputValue)
+            throw new IllegalStateException("Retrieval error")
+        }
+        val stop  = Platform.currentTime
+        System.out.println(stop-start)
+      }
+
+    }
   }
 }
