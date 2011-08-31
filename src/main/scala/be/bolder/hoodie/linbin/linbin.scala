@@ -78,8 +78,8 @@ object LinBin {
 
   def fromKeySortedArray[@specialized(Short, Int, Long, Float, Double) K,
                          @specialized(Short, Int, Long, Float, Double) T]
-                        (n: Int, l: Int, m: Int, data: Array[T])(extractor: (T => K))
-                        (implicit ord: Ordering[K], defaultValue: DefaultValue[T], mf: Manifest[T]): LinBin[K, T] = {
+                          (n: Int, l: Int, m: Int, data: Array[T])(extractor: (T => K))
+                          (implicit ord: Ordering[K], defaultValue: DefaultValue[T], mf: Manifest[T]): LinBin[K, T] = {
     verifyParameters(n, l, m)
     new KeyLinBin[K, T](n, l, m, defaultValue.value, data, Array.ofDim[T](stashSize(l, m)))(extractor)
   }
@@ -250,13 +250,24 @@ object LinBin {
           val start     = blockStart(insertPt)
           val end       = blockEnd(start)
           val last      = lastInBlock(start, end)
-          if ( insertPt < last ) {
-            Array.copy(stash, insertPt, stash, insertPt + 1, last - insertPt)
-            valueInStash(last + 1)  = true
-          } else
-            valueInStash(insertPt) = true
 
-          stash(insertPt) = item
+          // It holds that start <= insertPt <= last < end
+
+          if (insertPt <= last) {
+            val cmp       = ord.compare(key, extractKey(stashItem))
+            if (cmp < 0) { /* shift right and insert */
+              Array.copy(stash, insertPt, stash, insertPt + 1, last - insertPt + 1)
+              stash(insertPt) = item
+            } else {  /* > 0 hop, shift right, and insert */
+              Array.copy(stash, insertPt + 1, stash, insertPt + 2, last - insertPt)
+              stash(insertPt + 1) = item
+            }
+            valueInStash(last + 1)= true
+          } else {
+            valueInStash(insertPt) = true
+            stash(insertPt) = item
+          }
+
           // Report success
           true
         }
@@ -289,8 +300,12 @@ object LinBin {
           val start     = blockStart(deletePt)
           val end       = blockEnd(start)
           val last      = lastInBlock(start, end)
-          if (deletePt < last)
-            Array.copy(stash, deletePt + 1, stash, deletePt, last - deletePt - 1)
+          if (deletePt < last) {
+            Array.copy(stash, deletePt + 1, stash, deletePt, last - deletePt)
+            stash(last) = defaultValue
+          }
+          else
+            stash(deletePt) = defaultValue
           valueInStash(last) = false
 
           // Report success
@@ -382,8 +397,8 @@ object LinBin {
             }
           }
         }
-        offset  += 1 << (l - level)
         chunk  >>= 1
+        offset  += 1 << level
         level   -= 1
       }
 
@@ -418,10 +433,10 @@ object LinBin {
          // We have reached a top level that is empty
           if (empty < 0)
             // Report minIndex as insertion point if none was found before
-            return ( ~ minIndex, defaultValue )
+            return ( ~ minIndex, stash(minIndex) )
           else
             // Otherwise report previous insertion point
-            return ( ~ empty, defaultValue )
+            return ( ~ empty, stash(empty) )
         }
         else {
           val free  = endIndex - maxIndex
@@ -453,14 +468,14 @@ object LinBin {
                   throw new StashOverflowException
                 else
                   // Report insertion point
-                  return ( ~ empty, defaultValue )
+                  return ( ~ empty, stash(empty) )
               } else
                 cont = false
             }
           }
         }
-        offset  += 1 << (l - level)
         chunk  >>= 1
+        offset  += 1 << level
         level   -= 1
       }
 
@@ -543,24 +558,24 @@ object LinBin {
 
   }
 
-  sealed class ItemLinBin[@specialized(Short, Int, Long, Float, Double) T]
-                         (val n: Int, val l: Int, val m: Int, val defaultValue: T,
-                          override protected val strip: Array[T],
-                          override protected val stash: Array[T])
-                         (implicit val ord: Ordering[T], val mf: Manifest[T])
+  sealed private class ItemLinBin[@specialized(Short, Int, Long, Float, Double) T]
+                                   (val n: Int, val l: Int, val m: Int, val defaultValue: T,
+                                    override protected val strip: Array[T],
+                                    override protected val stash: Array[T])
+                                   (implicit val ord: Ordering[T], val mf: Manifest[T])
     extends LinBin[T, T] {
 
     @inline
     def extractKey(item: T) = item
   }
 
-  sealed class KeyLinBin[@specialized(Short, Int, Long, Float, Double) K,
-                         @specialized(Short, Int, Long, Float, Double) T]
-                         (val n: Int, val l: Int, val m: Int, val defaultValue: T,
-                          override protected val strip: Array[T],
-                          override protected val stash: Array[T])
-                         (val extractor: (T => K))
-                         (implicit val ord: Ordering[K], val mf: Manifest[T])
+  sealed private class KeyLinBin[@specialized(Short, Int, Long, Float, Double) K,
+                                 @specialized(Short, Int, Long, Float, Double) T]
+                                   (val n: Int, val l: Int, val m: Int, val defaultValue: T,
+                                    override protected val strip: Array[T],
+                                    override protected val stash: Array[T])
+                                   (val extractor: (T => K))
+                                   (implicit val ord: Ordering[K], val mf: Manifest[T])
     extends LinBin[K, T] {
 
     @inline
