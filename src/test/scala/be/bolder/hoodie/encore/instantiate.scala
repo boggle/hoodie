@@ -331,10 +331,84 @@ object EncoreSearches3 {
         field_x.set(center, 4.0f)
         field_y.set(center, 4.0f)
         field_z.set(center, 4.0f)
-        field_v.set(center, 4.0f)
+        field_v.set(center, 3.0f)
         field_t.set(center, 4.0f)
         // field_i.set(center, 4.0f)
         field_s.set(center, 1.5f)
+        schema.insert(center)
+        val weights = Array(1.0f, 1.0f, 1.0f, 1.0f, 1.0f, 1.0f) // , 1.0f)
+        System.out.println("Created")
+        val mem2 = runtime.totalMemory() - runtime.freeMemory()
+        System.out.println ( (mem2 - mem1) / 1024 )
+
+        val start = Platform.currentTime
+        for (i <- 0.until(times)) {
+          val result = schema.search[Set[(Float, EncoreSchemaFactory.R)]](weights, center, 3)
+          for (v <- result)
+            System.out.println(result)
+        }
+        val end = Platform.currentTime
+        System.out.println ( (end - start) / times )
+        val mem3 = runtime.totalMemory() - runtime.freeMemory()
+        System.out.println ( (mem3 - mem2) / 1024 )
+      }
+    }
+  }
+}
+
+object EncoreSearches3Int {
+  def main(args: Array[String]) {
+    val schemaFactory = EncoreSchemaFactory
+
+    {
+      import be.bolder.hoodie.PlainIXS._
+      import be.bolder.hoodie.PlainWDM._
+
+      val runtime = Runtime.getRuntime
+      val mem1 = runtime.totalMemory() - runtime.freeMemory()
+      val builder = schemaFactory.newBuilder
+      val field_x = builder.addField[Int]("x")
+      val field_y = builder.addField[Int]("y")
+      val field_z = builder.addField[Int]("z")
+      // val field_i = builder.addField[Int]("i")
+      val field_s = builder.addField[Int]("s")
+      val field_v = builder.addField[Int]("v")
+      val field_t = builder.addField[Int]("t")
+      val schema = builder.result
+
+      val len = 9
+
+      var center: EncoreSchemaFactory.R = null
+
+      for (x <- 0.until(len))
+      for (y <- 0.until(len))
+      for (z <- 0.until(len))
+      for (v <- 0.until(len))
+      for (t <- 0.until(len))
+      // for (i <- 0.until(len))
+      for (s <- 0.until(4))
+      {
+          val record = schema.mkRecord
+          field_x.set(record, (1000000 * math.random).toInt )
+          field_y.set(record, (1000000 * math.random).toInt )
+          field_z.set(record, (1000000 * math.random).toInt )
+          field_v.set(record, (1000000 * math.random).toInt )
+          field_t.set(record, (1000000 * math.random).toInt )
+          // field_i.set(record, math.random.toFloat.toInt)
+          field_s.set(record, (1000000 * math.random).toInt )
+          schema.insert(record)
+      }
+
+      {
+        val times = 10
+        val center = schema.mkRecord
+        field_x.set(center, 500000)
+        field_y.set(center, 500000)
+        field_z.set(center, 500000)
+        field_v.set(center, 500000)
+        field_t.set(center, 500000)
+        // field_i.set(center, 4.0f)
+        field_s.set(center, 1)
         schema.insert(center)
         val weights = Array(1.0f, 1.0f, 1.0f, 1.0f, 1.0f, 1.0f) // , 1.0f)
         System.out.println("Created")

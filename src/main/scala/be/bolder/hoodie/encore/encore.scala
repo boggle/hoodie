@@ -4,8 +4,8 @@ import be.bolder.hoodie._
 import scala.reflect.Manifest
 import collection.immutable.Queue
 import math.Ordering
-import java.lang.{IllegalStateException, IllegalArgumentException}
 import collection.mutable.{BitSet, PriorityQueue}
+import java.lang.{IllegalStateException, IllegalArgumentException}
 
 // Nearest-neighbor search based on in-memory skip lists
 //
@@ -82,7 +82,15 @@ object EncoreSchemaFactory extends SchemaFactory {
   }
 
   trait PeekingIterator extends Iterator[(Float, R)] {
-    def peek: Option[Float]
+    var sortScore: Float = Float.PositiveInfinity
+
+    def peek: (Float, R)
+
+    def peekValue: Float
+
+    @throws(classOf[IllegalStateException])
+    def peekRecord: R
+
     def index: Int
   }
 
@@ -162,10 +170,12 @@ object EncoreSchemaFactory extends SchemaFactory {
           val left  = predIterator(w, query)
           val right = succIterator(w, query)
 
-          private var buffer: Option[(Float, R)] = None
+          private var buffer: (Float, R) = null
 
-          def hasNext = buffer.isDefined || left.hasNext || right.hasNext
+          @inline
+          def hasNext = (buffer ne null) || left.hasNext || right.hasNext
 
+          @inline
           private def fetchNext() = (if (left.hasNext) {
                                        if (right.hasNext) {
                                          if (left.dist < right.dist) left else right
@@ -175,19 +185,47 @@ object EncoreSchemaFactory extends SchemaFactory {
           // Skip initial duplicate query point
           if (hasNext) next()
 
-          def peek: Option[Float] = {
+          @inline
+          def peek: (Float, R) = {
             if (hasNext) {
-              if (buffer.isEmpty) buffer = Some(fetchNext())
-              Some(buffer.get._1)
-            } else None
+              if (buffer eq null) {
+                buffer    = fetchNext()
+              }
+              buffer
+            } else
+              throw new IllegalStateException()
           }
 
+          @inline
+          def peekValue: Float = {
+            if (hasNext) {
+              if (buffer eq null) {
+                buffer    = fetchNext()
+              }
+              buffer._1
+            } else
+              Float.PositiveInfinity
+          }
+
+          @inline
+          def peekRecord: R = {
+            if (hasNext) {
+              if (buffer eq null) {
+                buffer    = fetchNext()
+              }
+              buffer._2
+            } else
+              throw new IllegalStateException()
+          }
+
+          @inline
           def next() = {
-            if (buffer.isDefined) {
-              val result = buffer.get
-              buffer = None
+            if (buffer ne null) {
+              val result = buffer
+              buffer     = null
               result
-            } else fetchNext()
+            } else
+              fetchNext()
           }
 
           val index = PrimField.this.index
@@ -479,16 +517,18 @@ object EncoreSchemaFactory extends SchemaFactory {
 
     // Insert record into index structure
     def insert(record: R) {
+      numInserted  += 1
+      record.number = numInserted
       for (field <- fields)
         field.insert(record)
-      numInserted += 1
-      record.number = numInserted
     }
 
     // Retrieve nearest neighbors of record using the given weighting
     protected def searchInto[That](weights: Weighting, query: R, k: Int,
                                    into: collection.mutable.Builder[(Float, R), That]) {
-      new Search[That](weights, query, k, into)()
+      val search = new Search[That](weights, query, k, into)
+      search()
+      // System.out.println(scala.runtime.ScalaRunTime.stringOf(search.statsArray))
     }
 
     final private class Search[That](weights: Weighting, query: R, k: Int,
@@ -497,65 +537,63 @@ object EncoreSchemaFactory extends SchemaFactory {
         throw new IllegalArgumentException("Invalid weights (wrong number of elements) provided")
 
       // Candidate records are sorted from lowest to highest weighted total distance
-      val candOrdering = Ordering.Float.reverse.on { (outer: (Float, R)) => outer._1}
+      // (we call reverse here since pqs deliver the highest on dequeue but we want the lowest)
+      val candOrdering = Ordering.Float.reverse.on { (outer: (Float, R)) => outer._1 }
+      var cands        = new PriorityQueue[(Float, R)]()(candOrdering)
 
       // Maximum dimension distance seen from the iterator for field
       val maxDists     = Array.ofDim[Float](fields.length)
 
-      val cands        = new PriorityQueue[(Float, R)]()(candOrdering)
+      // Set that caches which records already have been examined
       val set: BitSet  = new BitSet(size())
 
-      // Largest top-k value (Used to drop iterators)
+      // Largest(!) top-k value seen in cand queue (Used to drop iterators which are not better, i.e. > bound)
       var bound        = Float.PositiveInfinity
 
-      // Candidate values closer to the query than this can be delivered
+      var resultCount  = 0                      // Number of results delivered
+      var resultBound  = Float.NegativeInfinity // Bound of "worst" result found, i.e. resultBound <= bound
+      var foundCount   = 0                      // Number of candidates added since last call to deliver()
+
+      // Candidate values closer to the query than this can be delivered instantaneously
       var cut          = 0.0f
 
 
-      var itersArray   = fields.zipWithIndex.map {
+      val itersArray   = fields.zipWithIndex.map {
                            case (field, i) =>
-                             field.iterator(weights(i), field.approx(query))
+                             val record     = field.approx(query)
+                             val iter       = field.iterator(weights(i), record)
+                             iter.sortScore =  distanceSquare(weights, query, iter.peekRecord)
+                             iter
                          }.filter( _.hasNext ).toArray
 
-      // Iterators are sorted from lowest to highest weighted dimension distance,
-      // this minimizes the number of points added
-      //
-      // The distance value is made available via PeekIterator.peek which implements a buffer of size 1 for this purpose
-      //
-      // The first field in iter pairs is the field index.  It is used for maintenance of the maxDims array
-      //
-      // Reversing this ordering brings up the cut as fast as possible and might be better in very low dim situations
-      //
-      val iterOrdering = Ordering.Float.reverse.on {
-        (iter: Int) =>
-          val score = itersArray(iter).peek
-          if (score.isDefined) score.get else Float.NegativeInfinity
-      }
+
+      // val statsArray   = Array.ofDim[Int](itersArray.length)
+
+      // Iterators are sorted from lowest to highest score, as set below
+      // (we call reverse here since pqs deliver the highest on dequeue but we want the lowest)
+      val iterOrdering = Ordering.Float.reverse.on { (iterIndex: Int) => itersArray(iterIndex).sortScore }
       val iters        = new PriorityQueue[Int]()(iterOrdering)
-
       iters          ++= 0.until(itersArray.length)
-
-
-      var resultCount = 0                      // Number of results delivered
-      var resultBound = Float.NegativeInfinity // Bound of "worst" result found
-      var foundCount  = 0                      // Number of candidates added since last call to deliver()
-
 
       // Adds elem to results
       def add1(elem: (Float, R)) {
-        val root     = math.sqrt(elem._1.toDouble).toFloat
-        resultBound  = math.max(resultBound, elem._1)
-        into        += ((root, elem._2))
-        resultCount += 1
+        // need to take root since in the loop we use squares
+        val elemValue = elem._1
+        val root      = math.sqrt(elemValue.toDouble).toFloat
+        resultBound   = math.max(resultBound, elemValue)
+        into         += ((root, elem._2))
+        resultCount  += 1
       }
 
       // True, if no more values need to be delivered
+      @inline
       def isDone = resultCount == k
 
       // Delivers elem if it is <= cut
       //
       // Result value is true iff elem was delivered
       //
+      @inline
       def deliver1(elem: (Float, R)): Boolean = {
         if (elem._1 <= cut) {
           add1(elem)
@@ -569,6 +607,7 @@ object EncoreSchemaFactory extends SchemaFactory {
       //
       // Return value of true indicates that enough values have been found
       //
+      @inline
       def deliver(): Boolean = {
         foundCount = 0
         while (cands.nonEmpty) {
@@ -585,61 +624,73 @@ object EncoreSchemaFactory extends SchemaFactory {
 
       def apply() {
         while(iters.nonEmpty) {
-          // Dequeue iterator with highest dimension distance to the next element
-          val entry = iters.dequeue()
-          val iter  = itersArray(entry)
-          val index = iter.index
+          // Dequeue next iterator
+          val entry     = iters.dequeue()
+          val iter      = itersArray(entry)
+          val index     = iter.index
+
+          // statsArray(index) += 1
+
           val elem  = iter.next()
-          val rec   = elem._2
+
+          val elemValue  = elem._1
+          val elemRecord = elem._2
 
           // Update maxDims and cut value on the fly
-          val dimDist = elem._1
-          val dimSq   = dimDist * dimDist
-          val maxSq   = maxDists(index)
+          {
+            val dimSq = elemValue * elemValue
+            val maxSq = maxDists(index)
 
-          if (dimSq > maxSq) {
-            maxDists(index) = dimSq
-            cut            += (dimSq - maxSq)
+            if (dimSq > maxSq) {
+              maxDists(index) = dimSq
+              cut            += (dimSq - maxSq)
 
-            if (deliver())
-              return
+              if (deliver())
+                return
+            }
           }
 
           // Only if we haven't seen this record before from another iterator
-          if (!set(rec.number)) {
-            val recDist     = distanceSquare(weights, query, rec)
-            set(rec.number) = true
+          if ( ! set(elemRecord.number) ) {
+            val elemScore          = iter.sortScore
+            set(elemRecord.number) = true
 
             // Avoid cand queue: Instant delivery if <= cut value
-            val newCand = ((recDist, rec))
+            val newCand = ((elemScore, elemRecord))
             if (deliver1(newCand)) {
               if (isDone)
                 return
-            } else
-              // Otherwise: Only if cand is better than current result candidates
-              if (newCand._1 <= bound) {
-              // Add to queue
-              cands      += newCand
-              foundCount += 1
-              // Update bound (maximum distance to query point from already found results + lowest known candidates)
-              val numCands = k-resultCount
-              if (cands.size >= numCands)
-                bound = cands.take(numCands).foldLeft[Float](resultBound)(
-                  (op: Float, value: (Float, R)) => math.max(value._1, op)
-                )
+            } else {
+              val numMissing = k - resultCount
+
+              if (cands.length < numMissing) {
+                // Add to cand list if it is too short
+                cands      += newCand
+                foundCount += 1
+              } else if (elemScore <= bound) {
+                // Add to cand list if we have found something better
+                cands       += newCand
+                foundCount  += 1
+                cands        = cands.take(numMissing)
+                val newBound = cands.last._1
+                if (newBound < bound)
+                  bound = newBound
+              }
             }
           }
 
           if (iter.hasNext) {
-            val peek = iter.peek.get // factored out for debugging
-            if (peek <= bound)
+            val numMissing = k - resultCount
+            iter.sortScore = distanceSquare(weights, query, iter.peekRecord)
+
+            if ( (cands.size < numMissing) || (iter.peekValue < bound) )
               iters.enqueue(entry)
           }
         }
 
         // Deliver remaining results
-        while (cands.nonEmpty && !isDone)
-          add1(cands.dequeue())
+        while ( cands.nonEmpty && !isDone )
+          add1( cands.dequeue() )
       }
     }
   }

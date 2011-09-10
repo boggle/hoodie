@@ -32,6 +32,7 @@ package hoodie {
 
 import reflect.Manifest
 import collection.generic.{CanBuildFrom}
+import collection.mutable.PriorityQueue
 
 // Stock symmetric WDMs for primitive types
 object PlainWDM {
@@ -137,12 +138,28 @@ abstract class Schema[R] {
   def insert(record: R)
 
 
-  // Retrieve the ke nearest neighbors of query using the given weighting
+  // Retrieve the k nearest neighbors of query using the given weighting
   //
   final def search[That](weights: Weighting, query: R, k: Int)(implicit cbf: CanBuildFrom[_,(Float,R), That]): That = {
     val builder = cbf()
     searchInto(weights, query, k, builder)
     builder.result()
+  }
+
+  // Retrieve the k nearest neighbors of query using the given weighting using *linear* search
+  //
+  // This is for testing and measurement only
+  //
+  final def searchLinearly[That](weights: Weighting, query: R, k: Int, records: Iterator[R])
+                                (implicit cbf: CanBuildFrom[_,(Float,R), That]): That = {
+    val pqOrd   = Ordering.Float.on[(Float, R)]( _._1 ).reverse
+    var pq      = new PriorityQueue[(Float, R)]()(pqOrd)
+    for (record <- records) {
+      val distance  = distanceSquare(weights, query, record)
+      pq           += ((distance, record))
+      pq            = pq.take(k)
+    }
+    pq.dequeueAll
   }
 
   protected def searchInto[That](weights: Weighting, query: R, k: Int, into: Builder[(Float, R), That])
