@@ -92,6 +92,8 @@ object EncoreSchemaFactory extends SchemaFactory {
     def peekRecord: R
 
     def index: Int
+
+    def field: F[_]
   }
 
   // PrimBuilder ties it all together; as fields get added their index and typeIndex fields are set
@@ -229,6 +231,8 @@ object EncoreSchemaFactory extends SchemaFactory {
           }
 
           val index = PrimField.this.index
+
+          def field = PrimField.this
         }
 
       // If record has been inserted in this field's skip-list index, return it
@@ -403,11 +407,53 @@ object EncoreSchemaFactory extends SchemaFactory {
       private[EncoreSchemaFactory] def setPredPointer(record: R, value: R) {
         record.predMap(index) = value
       }
+
+      def newFold(initialBound: T, updater: (T, T) => T) = new Fold(initialBound, updater)
+
+      def newMinFold: Fold
+      def newMaxFold: Fold
+
+      val minBound: T
+      val maxBound: T
+
+      final class Fold(initialInitialBound: T, val updater: (T, T) => T) extends (() => T) {
+        private var initialBound = initialInitialBound
+        private var isFresh = true
+        private var bound   = initialBound
+
+        def +=(value: R) = {
+          if (isFresh)
+            isFresh = false
+          bound = updater(bound, get(value))
+          bound
+        }
+
+        def updateInitialBound(record: R) {
+          initialBound = updater(initialBound, get(record))
+        }
+
+        def apply(): T = bound
+
+        def reset() {
+          isFresh = true
+          bound   = initialBound
+          bound
+        }
+
+        def hasBeenUpdated = ! isFresh
+
+        def distance(w: Float, record: R) = wdm.distance(w, bound, get(record))
+
+        def compare(record: R) = wdm.compare(bound, get(record))
+      }
     }
 
     final class FloatField(aName: String, aState: State, anIxs: IXS[Float], aWdm: WDM[Float])
       extends PrimField[Float](aName, aState)(anIxs, aWdm, Manifest.Float) {
       
+      val minBound = Float.NegativeInfinity
+      val maxBound = Float.PositiveInfinity
+
       val typeIndex = state.floatFieldCount
 
       // Get value of field in record
@@ -421,10 +467,15 @@ object EncoreSchemaFactory extends SchemaFactory {
           record.floatMap(typeIndex) = value
       }
 
+      def newMinFold: Fold = newFold(maxBound, (a, b) => a.min(b) )
+      def newMaxFold: Fold = newFold(minBound, (a, b) => a.max(b) )
     }
     
     final class BoolField(aName: String, aState: State, anIxs: IXS[Boolean], aWdm: WDM[Boolean])
       extends PrimField[Boolean](aName, aState)(anIxs, aWdm, Manifest.Boolean) {
+
+      val minBound = false
+      val maxBound = true
 
       val typeIndex = state.boolFieldCount
 
@@ -439,10 +490,15 @@ object EncoreSchemaFactory extends SchemaFactory {
           record.boolMap(typeIndex) = value
       }
 
+      def newMinFold: Fold = newFold(maxBound, (a, b) => (!a || !b) )
+      def newMaxFold: Fold = newFold(minBound, (a, b) => ( a ||  b) )
     }
     
     final class IntField(aName: String, aState: State, anIxs: IXS[Int], aWdm: WDM[Int])
       extends PrimField[Int](aName, aState)(anIxs, aWdm, Manifest.Int) {
+
+      val minBound = Int.MinValue
+      val maxBound = Int.MaxValue
 
       val typeIndex = state.intFieldCount
 
@@ -456,6 +512,9 @@ object EncoreSchemaFactory extends SchemaFactory {
         else
           record.intMap(typeIndex) = value
       }
+
+      def newMinFold: Fold = newFold(maxBound, (a, b) => a.min(b) )
+      def newMaxFold: Fold = newFold(minBound, (a, b) => a.max(b) )
     }
 
     // Rewind builder
@@ -562,7 +621,7 @@ object EncoreSchemaFactory extends SchemaFactory {
                            case (field, i) =>
                              val record     = field.approx(query)
                              val iter       = field.iterator(weights(i), record)
-                             iter.sortScore =  distanceSquare(weights, query, iter.peekRecord)
+                             iter.sortScore = distanceSquare(weights, query, iter.peekRecord)
                              iter
                          }.filter( _.hasNext ).toArray
 
@@ -581,13 +640,39 @@ object EncoreSchemaFactory extends SchemaFactory {
         val elemValue = elem._1
         val root      = math.sqrt(elemValue.toDouble).toFloat
         resultBound   = math.max(resultBound, elemValue)
-        into         += ((root, elem._2))
+        val elemRecord: EncoreSchemaFactory.R = elem._2
+        into         += ((root, elemRecord))
         resultCount  += 1
+
+        // for (i <- 0.until(itersArray.length)) {
+        //    mins(i).updateInitialBound(elemRecord)
+        //   maxs(i).updateInitialBound(elemRecord)
+        // }
       }
 
       // True, if no more values need to be delivered
       @inline
       def isDone = resultCount == k
+
+/*
+      val mins = ( (0.until(itersArray.length)).map { (index) => itersArray(index).field.newMinFold } ).toArray
+      val maxs = ( (0.until(itersArray.length)).map { (index) => itersArray(index).field.newMaxFold } ).toArray
+
+      def updateMinMax(elemRecord: R) {
+        for (i <- 0.until(itersArray.length)) {
+           mins(i) += elemRecord
+           maxs(i) += elemRecord
+        }
+      }
+
+      def resetMinMax() {
+        // Update mins and maxs
+        for (i <- 0.until(itersArray.length)) {
+           mins(i).reset()
+           maxs(i).reset()
+        }
+      }
+*/
 
       // Delivers elem if it is <= cut
       //
@@ -647,45 +732,50 @@ object EncoreSchemaFactory extends SchemaFactory {
 
               if (deliver())
                 return
+
             }
           }
 
           // Only if we haven't seen this record before from another iterator
           if ( ! set(elemRecord.number) ) {
-            val elemScore          = iter.sortScore
+
             set(elemRecord.number) = true
 
-            // Avoid cand queue: Instant delivery if <= cut value
-            val newCand = ((elemScore, elemRecord))
-            if (deliver1(newCand)) {
-              if (isDone)
-                return
-            } else {
-              val numMissing = k - resultCount
+            // if (!mins(index).hasBeenUpdated || mins(index).compare(elemRecord) <= 0) {
+                val elemScore          = iter.sortScore
 
-              if (cands.length < numMissing) {
-                // Add to cand list if it is too short
-                cands      += newCand
-                foundCount += 1
-              } else if (elemScore <= bound) {
-                // Add to cand list if we have found something better
-                cands       += newCand
-                foundCount  += 1
-                cands        = cands.take(numMissing)
-                val newBound = cands.last._1
-                if (newBound < bound)
-                  bound = newBound
+                // Avoid cand queue: Instant delivery if <= cut value
+                val newCand = ((elemScore, elemRecord))
+                if (deliver1(newCand)) {
+                  if (isDone)
+                    return
+                } else {
+                  val numMissing = k - resultCount
+
+                  if (cands.length < numMissing) {
+                    // Add to cand list if it is too short
+                    cands      += newCand
+                    foundCount += 1
+                  } else if (elemScore <= bound) {
+                    // Add to cand list if we have found something better
+                    cands       += newCand
+                    foundCount  += 1
+                    cands        = cands.take(numMissing)
+                    val newBound = cands.last._1
+                    if (newBound < bound)
+                      bound = newBound
+                  }
+                }
               }
+            // }
+
+            if (iter.hasNext) {
+              val numMissing = k - resultCount
+              iter.sortScore = distanceSquare(weights, query, iter.peekRecord)
+
+              if ( (cands.size < numMissing) || (iter.peekValue < bound) )
+                iters.enqueue(entry)
             }
-          }
-
-          if (iter.hasNext) {
-            val numMissing = k - resultCount
-            iter.sortScore = distanceSquare(weights, query, iter.peekRecord)
-
-            if ( (cands.size < numMissing) || (iter.peekValue < bound) )
-              iters.enqueue(entry)
-          }
         }
 
         // Deliver remaining results
