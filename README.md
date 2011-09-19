@@ -1,7 +1,7 @@
 Hoodie
 ======
 
-This is an experimental fun project that implements *weighted* nearest neighbour search using euclidian distance.
+This is an experimental fun project that implements *perfect* and *weighted* nearest neighbour search using euclidian distance.
 NNS is implemented using in-memory index structures. The goal is to come up with something that might be suitable for
 graph databases.
 
