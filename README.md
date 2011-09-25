@@ -1,3 +1,24 @@
+
+Notes on hawt branch
+--------------------
+
+This is an attempt to redo encore as "holofon"
+
+Agenda
+
+- Finish chunkie:
+  Fixed-Size, Array-ish Int-to-KV-Pair DS, Sortable, Searchable
+  DONE
+- Reimplement linbin ontop of chunkie:
+  Insertable, fixed-size, sorted array
+  NEXT
+- Add split and merge ops to linbin
+- Adapte/write new, tree-like index DS atop the new linbins as leafes
+- Write holofon, same algo as encore but using the new lintree indexes and
+  hawtdispatch for concurreny
+- Measure :)
+
+
 Hoodie
 ======
 
