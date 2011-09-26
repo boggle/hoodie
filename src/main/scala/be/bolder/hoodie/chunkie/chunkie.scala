@@ -288,10 +288,9 @@ package chunkie {
    * Advantage: Requires minimal space
    * Disadvantage: Accessing record values may lead to more cache misses
    */
-  class SingleArrayMapChunks[@specialized(Int, Long, Float, Double, Boolean) R,
-                             @specialized(Int, Long, Float, Double, Boolean) V]
-    (val valueGetter: R => V, val valueSetter: (R, V) => Unit)
-    (implicit mfR: Manifest[R], mfV: Manifest[V]) {
+  class SingleArrayMapChunks[@specialized(Int, Long, Float, Double, Boolean) R : Manifest,
+                             @specialized(Int, Long, Float, Double, Boolean) V : Manifest]
+    (val valueGetter: R => V, val valueSetter: (R, V) => Unit) {
 
     final class SAMChunkOps
       extends DefaultChunkOps[Array[R], R, V]
@@ -360,9 +359,8 @@ package chunkie {
    * value updates back to records (your job)
    */
   object ParArrayMapChunks {
-    final class PAMChunkOps[@specialized(Int, Long, Float, Double, Boolean) R,
-                            @specialized(Int, Long, Float, Double, Boolean) V]
-    (implicit mfR: Manifest[R], mfV: Manifest[V])
+    final class PAMChunkOps[@specialized(Int, Long, Float, Double, Boolean) R : Manifest,
+                            @specialized(Int, Long, Float, Double, Boolean) V : Manifest]
       extends DefaultChunkOps[PAMChunkWrap[R, V], R, V]
       with BinarySearchChunkOps[PAMChunkWrap[R, V], V]
       with QuickSortChunkOps[PAMChunkWrap[R, V], V] {
