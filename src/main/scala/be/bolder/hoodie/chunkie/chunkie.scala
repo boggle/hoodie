@@ -36,37 +36,6 @@ package chunkie {
   }
 
   /**
-   * A ChunkWrap contains a chunk representation and has an interface for redirecting operations on its internal state
-   * to an appropriate ChunkOps instance
-   */
-  trait ChunkWrap {
-    type C >: this.type
-
-    def ops: ChunkOps[C]
-
-    @inline
-    final def size = ops.size(this)
-
-    @inline
-    final def updateFrom(toPos: Int, src: C, srcPos: Int) { ops.write(src, srcPos, this, toPos) }
-
-    @inline
-    final def writeTo(fromPos: Int, dst: C, dstPos: Int) { ops.write(this, fromPos, dst, dstPos) }
-
-    @inline
-    final def swap(srcPos: Int, dst: C, dstPos: Int) { ops.swap(this, srcPos, dst, dstPos) }
-
-    @inline
-    final def updateFrom(toPos: Int, src: C, srcPos: Int, len: Int) { ops.write(src, srcPos, this, toPos, len) }
-
-    @inline
-    final def writeTo(fromPos: Int, dst: C, dstPos: Int, len: Int) { ops.write(this, fromPos, dst, dstPos, len) }
-
-    @inline
-    final def swap(srcPos: Int, dst: C, dstPos: Int, len: Int) { ops.swap(this, srcPos, dst, dstPos, len) }
-  }
-
-  /**
    * KeyedChunkOps associate a key of type V to every entry in a chunk representation C
    */
   trait KeyedChunkOps[C, V] {
@@ -75,18 +44,6 @@ package chunkie {
     def key(chunk: C, index: Int): V
   }
 
-
-  /**
-   * Wrapper trait for chunk representations with KeyedChunkOps support
-   */
-  trait KeyedChunkWrap[V] {
-    self: ChunkWrap with KeyedChunkWrap[V] =>
-
-    override def ops: ChunkOps[C] with KeyedChunkOps[C, V]
-
-    @inline
-    final def key(index: Int): V = ops.key(this, index)
-  }
 
   /**
    * SearchingChunkOps support a search operation on chunk representations of type C
@@ -178,18 +135,6 @@ package chunkie {
         }
       }
     }
-  }
-
-  /**
-   * Wrapper trait for chunk representations with SearchChunkOps support
-   */
-  trait SearchChunkWrap[V] {
-    self: ChunkWrap with KeyedChunkWrap[V] with SearchChunkWrap[V] =>
-
-    override def ops: ChunkOps[C] with SearchChunkOps[C, V]
-
-    @inline
-    final def search(from: Int, to: Int, value: V)(implicit ord: Ordering[V]): Int = ops.search(this, from, to, value)
   }
 
   /**
@@ -307,19 +252,6 @@ package chunkie {
   }
 
   /**
-   * Wrapper trait for chunk representations with SortChunkOps support
-   */
-  trait SortChunkWrap[V] {
-    self: ChunkWrap with KeyedChunkWrap[V] with SortChunkWrap[V] =>
-
-    override def ops: ChunkOps[C] with KeyedChunkOps[C, V] with SortChunkOps[C, V]
-
-    @inline
-    final def sort(off: Int, len: Int)(implicit ord: Ordering[V]) = ops.sort(self, off, len)
-  }
-
-
-  /**
    * MapChunksOps instances provide key-value data per Int-indexed entry in a chunk representation of type C
    */
   trait MapChunkOps[C, R, V] {
@@ -337,28 +269,6 @@ package chunkie {
 
 
   /**
-   * Wrapper trait for chunk representations with MapChunkOps support
-   */
-  trait MapChunkWrap[R, V] {
-    self: ChunkWrap with KeyedChunkWrap[V] with MapChunkWrap[R, V] =>
-
-    override def ops: ChunkOps[C] with KeyedChunkOps[C, V] with MapChunkOps[C, R, V]
-
-    @inline
-    final def getRecord(index: Int): R = ops.getRecord(this, index)
-
-    @inline
-    final def setRecord(index: Int, newValue: R) { ops.setRecord(this, index, newValue) }
-
-    @inline
-    final def getValue(index: Int): V = ops.getValue(this, index)
-
-    @inline
-    final def setValue(index: Int, newValue: V) { ops.setValue(this, index, newValue) }
-  }
-
-
-  /**
    * Bundles several useful ChunkOps over chunk representations of type C together
    */
   trait DefaultChunkOps[C, R, V] extends ChunkOps[C]
@@ -370,19 +280,6 @@ package chunkie {
     self: DefaultChunkOps[C, R, V] =>
   }
 
-  /**
-   * Wrapper trait for chunk representations with DefaultChunkOps support
-   */  
-  trait DefaultChunkWrap[R, V] extends ChunkWrap
-    with KeyedChunkWrap[V]
-    with MapChunkWrap[R, V]
-    with SearchChunkWrap[V]
-    with SortChunkWrap[V] {
-
-    self: DefaultChunkWrap[R, V] =>
-
-    override def ops: DefaultChunkOps[C, R, V]
-  }
 
   /**
    * Implementation of DefaultChunkOps that just uses a single array to store records internally and
@@ -397,34 +294,36 @@ package chunkie {
     (implicit mfR: Manifest[R], mfV: Manifest[V]) {
 
     final class SAMChunkOps
-      extends DefaultChunkOps[SAMChunkWrap, R, V]
-      with BinarySearchChunkOps[SAMChunkWrap, V]
-      with QuickSortChunkOps[SAMChunkWrap, V] {
+      extends DefaultChunkOps[Array[R], R, V]
+      with BinarySearchChunkOps[Array[R], V]
+      with QuickSortChunkOps[Array[R], V] {
 
-    def ofSize(size: Int) = new SAMChunkWrap(SAMChunkOps.this, Array.ofDim[R](size), Array.ofDim[V](size))
+    override def empty = Array.empty[R]
+
+    def ofSize(size: Int) = Array.ofDim[R](size)
 
     @inline
-    def size(chunk: SAMChunkWrap) = chunk.recs.length
+    def size(chunk: Array[R]) = chunk.length
 
     @inline
-    def write(src: SAMChunkWrap, srcPos: Int, dst: SAMChunkWrap, dstPos: Int) {
-      dst.recs(dstPos) = src.recs(srcPos)
+    def write(src: Array[R], srcPos: Int, dst: Array[R], dstPos: Int) {
+      dst(dstPos) = src(srcPos)
     }
 
     @inline
-    def write(src: SAMChunkWrap, srcPos: Int, dst: SAMChunkWrap, dstPos: Int, len: Int) {
-      Array.copy(src.recs, srcPos, dst.recs, dstPos, len)
+    def write(src: Array[R], srcPos: Int, dst: Array[R], dstPos: Int, len: Int) {
+      Array.copy(src, srcPos, dst, dstPos, len)
     }
 
     @inline
-    def swap(src: SAMChunkWrap, srcPos: Int, dst: SAMChunkWrap, dstPos: Int) {
-      val oldSrcRec    = src.recs(srcPos)
-      src.recs(srcPos) = dst.recs(dstPos)
-      dst.recs(dstPos) = oldSrcRec
+    def swap(src: Array[R], srcPos: Int, dst: Array[R], dstPos: Int) {
+      val oldSrcRec    = src(srcPos)
+      src(srcPos) = dst(dstPos)
+      dst(dstPos) = oldSrcRec
     }
 
     @inline
-    def swap(src: SAMChunkWrap, srcPos: Int, dst: SAMChunkWrap, dstPos: Int, len: Int) {
+    def swap(src: Array[R], srcPos: Int, dst: Array[R], dstPos: Int, len: Int) {
       var _s = srcPos
       var _d = dstPos
       var _i = 0
@@ -438,24 +337,18 @@ package chunkie {
 
 
     @inline
-    def getRecord(chunk: SAMChunkWrap, index: Int) = chunk.recs(index)
+    def getRecord(chunk: Array[R], index: Int) = chunk(index)
 
     @inline
-    def setRecord(chunk: SAMChunkWrap, index: Int, newRecord: R) { chunk.recs(index) = newRecord }
+    def setRecord(chunk: Array[R], index: Int, newRecord: R) { chunk(index) = newRecord }
 
     @inline
-    def getValue(chunk: SAMChunkWrap, index: Int) = valueGetter(chunk.recs(index))
+    def getValue(chunk: Array[R], index: Int) = valueGetter(chunk(index))
 
     @inline
-    def setValue(chunk: SAMChunkWrap, index: Int, newValue: V) {
-      valueSetter(chunk.recs(index), newValue)
+    def setValue(chunk: Array[R], index: Int, newValue: V) {
+      valueSetter(chunk(index), newValue)
     }
-  }
-
-  final class SAMChunkWrap(override val ops: SAMChunkOps, val recs: Array[R], val vals: Array[V])
-    extends DefaultChunkWrap[R, V] {
-
-    type C = SAMChunkWrap
   }
  }
 
@@ -474,7 +367,8 @@ package chunkie {
       with BinarySearchChunkOps[PAMChunkWrap[R, V], V]
       with QuickSortChunkOps[PAMChunkWrap[R, V], V] {
 
-      def ofSize(size: Int) = new PAMChunkWrap[R, V](PAMChunkOps.this, Array.ofDim[R](size), Array.ofDim[V](size))
+      override def empty = PAMChunkWrap[R, V](Array.empty[R], Array.empty[V])
+      def ofSize(size: Int) = PAMChunkWrap[R, V](Array.ofDim[R](size), Array.ofDim[V](size))
 
       @inline
       def size(chunk: PAMChunkWrap[R, V]) = chunk.recs.length
@@ -529,12 +423,7 @@ package chunkie {
       def setValue(chunk: PAMChunkWrap[R, V], index: Int, newValue: V) { chunk.vals(index) = newValue }
     }
 
-    final class PAMChunkWrap[@specialized(Int, Long, Float, Double, Boolean) R,
-                            @specialized(Int, Long, Float, Double, Boolean) V]
-    (override val ops: PAMChunkOps[R, V], val recs: Array[R], val vals: Array[V])
-      extends DefaultChunkWrap[R, V] {
-
-      type C = PAMChunkWrap[R, V]
-    }
+    final case class PAMChunkWrap[@specialized(Int, Long, Float, Double, Boolean) R,
+                                  @specialized(Int, Long, Float, Double, Boolean) V](recs: Array[R], vals: Array[V])
   }
 }
